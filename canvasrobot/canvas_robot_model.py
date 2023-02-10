@@ -117,6 +117,7 @@ LAST_YEAR = '-{0}-{1}'.format(AC_YEAR - 1, AC_YEAR)
 THIS_YEAR = '-{0}-{1}'.format(AC_YEAR, AC_YEAR + 1)
 NEXT_YEAR = '-{0}-{1}'.format(AC_YEAR + 1, AC_YEAR + 2)
 
+EXAMINATION_FOLDER = "Tentamens"
 
 def load_config(default_path='ca_robot.yaml'):
     """
@@ -159,6 +160,7 @@ class LocalDAL(DAL):
                           Field('teachers', 'list:string'),  # as usernames
                           Field('teachers_names', 'list:string'),
                           Field('status', 'integer'),
+                          Field('nr_students', 'integer'),
                           Field('nr_modules', 'integer'),
                           Field('nr_module_items', 'integer'),
                           Field('nr_pages', 'integer'),
@@ -167,9 +169,29 @@ class LocalDAL(DAL):
                           Field('nr_files', 'integer'),
                           # Field('nr_collaborations', 'integer'),
                           Field('nr_ext_urls', 'integer'),
+                          Field('assignments_summary', 'string'),
+                          Field('examinations_summary', 'string'),
+                          Field('examinations_ok', 'boolean', default=False),
+                          Field('examinations_findings', 'string'),
+                          Field('examinations_details_osiris', 'string'),
                           singular='LMS course',
                           plural='LMS courses',
                           format='%(name)s[%(teacher_names)s]')
+
+        # to record a controlled set of names referring to examination assigments
+        self.define_table('examination',
+                          Field('course',
+                                'reference course',
+                                requires=validators.IS_IN_DB(self, 'course.course_id',
+                                                             self.course._format)),
+                          Field('course_name', 'string'), # a bit redundant
+                          Field('name', 'string'),
+                          Field('candidate', 'boolean',
+                                label="Only Examination when False",
+                                default=True),
+                          format='%(name)s',
+                          singular='Examination name',
+                          plural='Examination names')
 
         self.define_table('user',
                           Field('user_id', 'integer'),
@@ -198,6 +220,19 @@ class LocalDAL(DAL):
         # self.course.no_students = Field.Virtual('no_students',
         #                                       lambda row: self.((self.course2user.course == row.course.id) &
         #                                                         (self.course2user.role == 'S')).count())
+
+        self.define_table('submission',
+                          Field('submission_id', 'integer'),
+                          Field('assigment_id', 'integer'),
+                          Field('course_id', 'integer'),
+                          Field('user_id', 'integer'),
+                          Field('submission_type', 'string'),
+                          Field('url','string'),
+                          Field('grade', 'string'),
+                          Field('graded_at', 'string'),
+                          format='%(submission_id)s-%(assigment_id)s %(user_id)s',
+                          singular='Submission',
+                          plural='Submissions')
 
         self.define_table('document',
                           Field('fname', 'string'),  # from bb
