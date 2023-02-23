@@ -1,2 +1,2 @@
-from .canvas_robot import CanvasRobot, LocalDAL, ENROLLMENT_TYPES, STUDADMIN, EDUCATIONS, COMMUNITIES, \
-    SHORTNAMES
+from .canvas_robot import CanvasRobot, LocalDAL, Answer,ENROLLMENT_TYPES, STUDADMIN, \
+    EDUCATIONS, COMMUNITIES, SHORTNAMES
