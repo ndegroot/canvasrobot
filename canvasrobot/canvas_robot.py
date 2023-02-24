@@ -966,7 +966,8 @@ class CanvasRobot(object):
     def get_courses_from_database(self,
                                   skip_courses_without_students=False,
                                   qry=None,
-                                  orderby=None):
+                                  orderby=None,
+                                  fields=None):
         db = self.db
         if skip_courses_without_students:
             cur_qry = (db.course.nr_students>0)
@@ -975,6 +976,8 @@ class CanvasRobot(object):
 
         if qry:
             cur_qry = cur_qry & qry
+
+        fields = fields or db.course.ALL
         orderby=orderby or db.course.course_code
         records = db(cur_qry).select(db.course.ALL,
                                      orderby=orderby)
