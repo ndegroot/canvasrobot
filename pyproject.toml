@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "canvasrobot"
-version = "0.5.3"
+version = "0.5.4"
 description = "Library which uses Canvasapi https://canvasapi.readthedocs.io/en/stable/getting-started.html to provide a CanvasRobot class."
 authors = ["Nico de Groot <ndegroot0@gmail.com>",]
 readme = "README.md"

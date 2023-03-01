@@ -9,6 +9,7 @@ import time
 from collections import namedtuple
 from collections import deque
 from datetime import datetime
+import threading
 
 import attrs
 from attrs import define, field, asdict
@@ -192,6 +193,51 @@ class CourseMetadata:
 
     # #ext_urls: int
     # avr_len_assignments: int
+
+
+class UpdateDatabaseThread(threading.Thread):
+
+    def __init__(self, group=None, target=None, name=None,
+                 msg_queue=None, stop_list=None, single_course=None, max_number=None,
+                 kwargs=None, canvasrobot=None):
+        super().__init__(group=group, target=target,
+                         name=name)
+        self.exc = None
+        assert msg_queue, "needs msg_queue parameter"
+        self.queue=msg_queue
+        assert canvasrobot, "needs canvasrobot instance"
+        if stop_list is None:
+            self.stop_list = STOP_LIST
+        self.single_course = single_course
+        self.max_number = max_number
+        self.aim = "all courses"
+        if single_course:
+            self.aim = f"single course ({single_course})"
+        if max_number:
+            self.aim = f"first {max_courses} courses"
+
+        self.kwargs = kwargs
+
+    def update_database(self):
+        try:
+            robot.update_database_from_canvas(single_course=self.single_course,
+                                              stop_list=self.stop_list,
+                                              max_number=self.max_number)
+        except sqlite3.OperationalError as exc:
+            # NOT working to catch the db-is-locked Operational error
+            showerror(title="database", message=f"DB problem {exc}")
+
+    def run(self):
+        self.exc = None
+        try:
+            self.update_database()
+        except BaseException as exc:
+            self.exc = exc
+
+    def join(self, timeout=None):
+        threading.Thread.join(self, timeout)
+        if self.exc:
+            raise self.exec
 
 
 # noinspection PyTypeChecker,PyUnresolvedReferences,PyCallingNonCallable
@@ -1015,7 +1061,6 @@ class CanvasRobot(object):
             """
 
         db = self.db
-        examinations = self.get_examinations_from_database(candidate=False)
         msg= f'open courselist for year {self.year} - {self.year+1}'
         self.add_to_queue(msg,None)
         logging.info(msg)
@@ -1074,6 +1119,7 @@ class CanvasRobot(object):
             format_str = "%Y-%m-%dT%H:%M:%SZ"
             creation_date = datetime.strptime(course.created_at, format_str)
             course_id = None
+            examinations = self.get_examinations_from_database(candidate=False)
             canonical_examination_names = [row.name for row in examinations if (row.course==course.id
                                                                                 and not row.candidate)]
             md = self.course_metadata(course.id, canonical_examination_names)
@@ -1462,7 +1508,7 @@ class CanvasRobot(object):
 
     def create_quizzes_from_data(self,
                                  course_id: int,
-                                 question_format="Vraag {}.",
+                                 question_format="Question {}.",
                                  data=None,
                                  gui_root=None,
                                  gui_queue=None
