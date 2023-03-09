@@ -1,5 +1,3 @@
-import sys
-from collections.abc import Callable
 import io
 import json
 import mimetypes
@@ -7,15 +5,14 @@ import os
 import re
 import time
 from collections import namedtuple
-from collections import deque
 from datetime import datetime
-import threading
 
 import attrs
-from attrs import define, field, asdict
+from attrs import define, asdict
 import canvasapi
 import requests
 import logging
+import keyring
 
 from rich.logging import RichHandler
 from rich.progress import track
@@ -26,9 +23,9 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder
 
-from .canvas_robot_model import AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES, STUDADMIN, \
-    EDUCATIONS, COMMUNITIES, LocalDAL, SHORTNAMES, CanvasConfig, EXAMINATION_FOLDER
-from .entities import User, EnrollDTO, SearchTextInCourseDTO, QuestionDTO
+from .canvas_robot_model import AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES, \
+    EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig, EXAMINATION_FOLDER
+from .entities import User, QuestionDTO
 
 logging.getLogger("canvasapi").setLevel(logging.WARNING)  # we don't need the info messages
 # from this library
@@ -44,38 +41,6 @@ logging.basicConfig(
     ]
 )
 
-
-def get_api_data(app_window=False):
-    """ ask for canvas username and api key, uses keyring to
-    store the values in a safe space
-    like /home/[your username]/.config/python_keyring
-    # on Windows: /Users/[your username]/...
-    """
-
-    key = keyring.get_password(NAMESPACE, ENTRY)
-    if key in (None, ""):
-        msg = "Enter your Canvas APi Key see 'Add a token' at https://community.canvaslms.com/docs/DOC-16041"
-        key = simpledialog.askstring("Input",
-                                     msg,
-                                     parent=app_window) if app_window \
-            else Prompt.ask(msg)
-        keyring.set_password(NAMESPACE, ENTRY, key)
-
-    url = keyring.get_password(NAMESPACE, URL)
-    if url in (None, ""):
-        msg = "Enter your Canvas URL (something like https://tilburguniversity.instructure.com)"
-        url = simpledialog.askstring("Input",
-                                     msg,
-                                     parent=app_window) if app_window \
-            else Prompt.ask(msg)
-        keyring.set_password(NAMESPACE, URL, url)
-
-    return url, key
-
-
-def reset_api_data(app_window=None):
-    for key in (URL, ENTRY):
-        keyring.delete_password(NAMESPACE, key)
 
 
 # noinspection PyProtectedMember
@@ -195,55 +160,9 @@ class CourseMetadata:
     # avr_len_assignments: int
 
 
-class UpdateDatabaseThread(threading.Thread):
-
-    def __init__(self, group=None, target=None, name=None,
-                 msg_queue=None, stop_list=None, single_course=None, max_number=None,
-                 kwargs=None, canvasrobot=None):
-        super().__init__(group=group, target=target,
-                         name=name)
-        self.exc = None
-        assert msg_queue, "needs msg_queue parameter"
-        self.queue=msg_queue
-        assert canvasrobot, "needs canvasrobot instance"
-        if stop_list is None:
-            self.stop_list = STOP_LIST
-        self.single_course = single_course
-        self.max_number = max_number
-        self.aim = "all courses"
-        if single_course:
-            self.aim = f"single course ({single_course})"
-        if max_number:
-            self.aim = f"first {max_courses} courses"
-
-        self.kwargs = kwargs
-
-    def update_database(self):
-        try:
-            robot.update_database_from_canvas(single_course=self.single_course,
-                                              stop_list=self.stop_list,
-                                              max_number=self.max_number)
-        except sqlite3.OperationalError as exc:
-            # NOT working to catch the db-is-locked Operational error
-            showerror(title="database", message=f"DB problem {exc}")
-
-    def run(self):
-        self.exc = None
-        try:
-            self.update_database()
-        except BaseException as exc:
-            self.exc = exc
-
-    def join(self, timeout=None):
-        threading.Thread.join(self, timeout)
-        if self.exc:
-            raise self.exec
-
-
 # noinspection PyTypeChecker,PyUnresolvedReferences,PyCallingNonCallable
 class CanvasRobot(object):
     db: callable
-    from collections import deque
     TOT_WEIGHT: int = 100
     year: int = AC_YEAR
     def __init__(self, reset_api_keys=False, years_back = 0, msg_queue=None):
@@ -404,11 +323,15 @@ class CanvasRobot(object):
                 for idx, submission in enumerate(submissions, start=1):
                     if assignment.name in examination_names:
                         if submission.submission_type == "online_upload":
+
+                            originality_str = (f"{submission.has_originality_report}"
+                            if hasattr(submission, 'has_originality_report')
+                                               else "no has_originality_report attribute!\n")
                             submissions_summary += (f"({idx}. {submission.submission_type}) graded "
                                                     f"{submission.grade} at "
                                                     f"{submission.graded_at}. "
                                                     f"Checked for plagiarism: "
-                                                    f"{submission.has_originality_report if hasattr(submission,'has_originality_report') else 'no has_originality_report attribute!'}\n"
+                                                    f"{originality_str}"
                                                     )
                         else:
                             submissions_summary+=(f"({idx}. {submission.submission_type}) graded "
@@ -707,14 +630,16 @@ class CanvasRobot(object):
                                                        department=row[5],
                                                        memo=row[6])
                 if not course_id:  # must be there
-                    course_id = db(db.course.course_base == row[0]).select(db.course.id)[0].id
+                    course_id = db(db.course.course_base ==
+                                   row[0]).select(db.course.id)[0].id
                 else:
                     logging.info("course added")
                 for t_name in teacher_names:
                     teacher_id = db.teacher.update_or_insert(db.teacher.name == t_name,
                                                              name=t_name)
                     if not teacher_id:
-                        teacher_id = db(db.teacher.name == t_name).select(db.teacher.id)[0].id
+                        teacher_id = db(db.teacher.name ==
+                                        t_name).select(db.teacher.id)[0].id
                     db.course2teacher.insert(course=course_id,
                                              teacher=teacher_id)
 
@@ -902,7 +827,8 @@ class CanvasRobot(object):
                 # test_file_name = bb_files[0].fname
                 self.update_documents(bb_files)  # record data files in database
                 total_files += bb_files
-        return "{} courses scanned {} files found".format(len(courses), len(total_files))
+        return "{} courses scanned {} files found".format(len(courses),
+                                                          len(total_files))
 
     # the delegates ---
     # noinspection PyRedeclaration
@@ -970,7 +896,7 @@ class CanvasRobot(object):
         db = self.db
         counters = namedtuple('Counters', ['total', 'ok', 'failed'])
         items = self.get_list_of_documents()
-        counters.total = len(files)
+        counters.total = len(items)
         counters.ok = 0
         counters.failed = 0
         for item in items:
@@ -989,7 +915,7 @@ class CanvasRobot(object):
         db = self.db
         counters = namedtuple('Counters', ['total', 'ok', 'failed'])
         items = self.get_list_of_documents()
-        counters.total = len(files)
+        counters.total = len(items)
         counters.ok = 0
         counters.failed = 0
         for item in items:
@@ -1006,7 +932,8 @@ class CanvasRobot(object):
         db = self.db
         # include the NULL values
         qry = ((db.examination.id>0)&
-               (db.examination.candidate==candidate)) if candidate else (db.examination.id > 0)
+               (db.examination.candidate==
+                candidate)) if candidate else (db.examination.id > 0)
         records = db( qry ).select(db.examination.ALL)
         return records
     def get_courses_from_database(self,
@@ -1044,11 +971,14 @@ class CanvasRobot(object):
         ud_fields = {field: value}
         #row = db(db[table][search_field] == search_id).select()
         #row2 = db(db.course.course_id == search_id).select()
-        result = db(db[table][search_field] == search_id).update(**ud_fields)
+        db(db[table][search_field] == search_id).update(**ud_fields)
         db.commit()
 
     # noinspection PyUnusedLocal
-    def update_database_from_canvas(self, single_course=None, max_number=None, stop_list=None):
+    def update_database_from_canvas(self,
+                                    single_course=None,
+                                    max_number=None,
+                                    stop_list=None):
         """
             Using the canvasapi to read the list of TST courses and
             - record internal_id course_id, fname and instructors in the
@@ -1062,7 +992,7 @@ class CanvasRobot(object):
 
         db = self.db
         msg= f'open courselist for year {self.year} - {self.year+1}'
-        self.add_to_queue(msg,None)
+        self.add_to_queue(msg, None)
         logging.info(msg)
         num_rows = 0
         # tst = self.canvas.get_account(6)  # admin account
@@ -1071,7 +1001,7 @@ class CanvasRobot(object):
         max_number = max_number or num_courses
 
         for idx,course in enumerate(courses):
-            self.add_to_queue(course.name, (idx,num_courses))
+            self.add_to_queue("<Progress>", (course.name,idx,num_courses))
 
             # only insert/update course if current year unless single_course
             if (str(course.sis_course_id)[:4] != str(self.year)
@@ -1109,9 +1039,8 @@ class CanvasRobot(object):
                 teacher_names = [teacher.name for teacher in teachers
                                  if hasattr(teacher, 'login_id')]
             except AttributeError as e:
-                msg = f"skipped teacher of {course.name} [{course.id}]"
+                msg = f"skipped teacher of {course.name} [{course.id}] due to {e}"
                 logging.warning(msg)
-                # print(e, msg)
                 continue
             logging.info("instructors: {0}".format(teacher_logins))  # instructors
 
@@ -1120,8 +1049,8 @@ class CanvasRobot(object):
             creation_date = datetime.strptime(course.created_at, format_str)
             course_id = None
             examinations = self.get_examinations_from_database(candidate=False)
-            canonical_examination_names = [row.name for row in examinations if (row.course==course.id
-                                                                                and not row.candidate)]
+            canonical_examination_names = [row.name for row in examinations
+                                           if (row.course==course.id and not row.candidate)]
             md = self.course_metadata(course.id, canonical_examination_names)
             try:
                 course_id = db.course.update_or_insert(db.course.course_id == course.id,
@@ -1144,7 +1073,9 @@ class CanvasRobot(object):
                                                        teachers=teacher_logins,
                                                        teachers_names=teacher_names)
             except Exception as e:
-                logging.exception("{0} error inserting {1}".format(e, course))
+                err = f"{e} error inserting {course.name}"
+                self.add_to_queue("<InsertError>", err)
+                logging.exception(err)
                 raise
             if course_id:
                 db(db.course.id == inserted_id).update(status=2)
@@ -1152,7 +1083,8 @@ class CanvasRobot(object):
                 course_id = db(db.course.course_id == course.id).select().first().id
             for cand in md.examination_candidates:
                 # candidate is True if course_name in examination_list else False
-                db.examination.update_or_insert((db.examination.course == cand.course_id)&
+                db.examination.update_or_insert((db.examination.course ==
+                                                 cand.course_id)&
                                                  (db.examination.name == cand.name),
                                                  course=cand.course_id,
                                                  course_name=cand.course_name,
@@ -1168,6 +1100,9 @@ class CanvasRobot(object):
             db.commit()
             num_rows += 1
 
+        self.add_to_queue("<Done>",
+                          (f"Update db from Canvas "
+                           f"{single_course or max_number or 'All courses'}"))
         return num_rows
 
     def is_user_valid(self, userinfo):
@@ -1447,7 +1382,7 @@ class CanvasRobot(object):
         ws.append(["Student", "SIS User ID", "Final Score", "Final Grade"])
         # data
         for row in grades:
-            ws.append(attr.astuple(row))
+            ws.append(attrs.astuple(row))
 
         # set width
         dim_holder = DimensionHolder(worksheet=ws)
@@ -1589,12 +1524,12 @@ class CanvasRobot(object):
             msg, quiz_id = self.create_quiz(course_id=course_id,
                                             title=quiz_name,
                                             quiz_type="practice_quiz")
-            for index, (question_text, answers) in enumerate(questions):
+            for index, (question_text, answers) in enumerate(questions, start=1):
                 answers_asdict = [attrs.asdict(answer) for answer in answers]
-                question_dto = QuestionDTO(question_name=question_format.format(index + 1),
+                question_dto = QuestionDTO(question_name=question_format.format(index),
                                            question_text=question_text,
                                            answers=answers_asdict)
-                robot.create_question(course_id=COURSE_ID,
+                self.create_question(course_id=COURSE_ID,
                                       quiz_id=quiz_id,
                                       question_dto=question_dto)
 
@@ -1612,14 +1547,16 @@ class CanvasRobot(object):
             logging.info(f"No action needed: Folder '(course) files/{foldername}' "
                          f"already in ({course_id})")
             return -1
-        folder_id = course.create_folder(foldername, parent_folder_path='/', locked=True)
+        folder_id = course.create_folder(foldername,
+                                         parent_folder_path='/',
+                                         locked=True)
         logging.info(f"Folder '(course) files/{foldername}' should be created now")
         return folder_id
 
     def create_folder_in_all_courses(self, foldername):
         for course in track(self.get_all_active_tst_courses(from_db=False),
                             description="All current courses..."):
-            folder_id = self.create_folder_in_course_files(course.id, foldername)
+            self.create_folder_in_course_files(course.id, foldername)
 
     def unpublish_subfolder_in_all_courses(self,
                                            foldername: str,
@@ -1632,7 +1569,7 @@ class CanvasRobot(object):
             if course.name.endswith("_conclude"):
                 continue
             # logging.info(course.name)
-            folder_id = self.unpublish_folderitems_in_course(course.id,
+            self.unpublish_folderitems_in_course(course.id,
                                                              foldername,
                                                              files_too,
                                                              check_only)
@@ -1688,7 +1625,7 @@ class CanvasRobot(object):
                 except AttributeError:
                     logging.warning(f"Files tab visibility of {course.name} {course_id} missing")
 
-                folder_id = folder.id
+                # folder_id = folder.id
                 if not folder.locked:
                     if not check_only:
                         folder.update(locked=True)
