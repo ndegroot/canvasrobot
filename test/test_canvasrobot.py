@@ -1,7 +1,6 @@
 from canvasrobot import CanvasRobot
 import mock
 import builtins
-from .test_base import set_keyboard_input
 
 
 def tst_init():
@@ -36,6 +35,7 @@ TEST_COURSE_NR_EXAMINATIONS = 4 # first create a test course in Canvas
 
 # - with assigments and at least one graded submission with file upload
 # - and at least one file in folder 'Tentamens' in Files
+
 cr = CanvasRobot()
 
 
@@ -84,9 +84,9 @@ def test_update_database_from_canvas():
         "examination files not (complete) in summary"
 
 def test_update_record_db():
-    result = cr.update_record_db( "course_id", TEST_COURSE, "course", "examinations_ok", True)
+    cr.update_record_db( "course_id", TEST_COURSE, "course", "examinations_ok", True)
     course = cr.get_course_from_database(TEST_COURSE)
-    assert course.examinations_ok == True
-    result = cr.update_record_db( "course_id", TEST_COURSE, "course", "examinations_ok", False)
+    assert course.examinations_ok is True
+    cr.update_record_db( "course_id", TEST_COURSE, "course", "examinations_ok", False)
     course = cr.get_course_from_database(TEST_COURSE)
-    assert course.examinations_ok == False
+    assert course.examinations_ok is False

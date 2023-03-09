@@ -1,8 +1,5 @@
 import canvasrobot as cr
 import rich
-from rich.logging import RichHandler
-import logging
-import toml
 
 
 if __name__ == '__main__':

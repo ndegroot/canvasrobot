@@ -12,7 +12,6 @@ from attrs import define, asdict
 import canvasapi
 import requests
 import logging
-import keyring
 
 from rich.logging import RichHandler
 from rich.progress import track
@@ -25,15 +24,15 @@ from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder
 
 from .canvas_robot_model import AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES, \
     EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig, EXAMINATION_FOLDER
-from .entities import User, QuestionDTO
+from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, Stats
 
-logging.getLogger("canvasapi").setLevel(logging.WARNING)  # we don't need the info messages
+logging.getLogger("canvasapi").setLevel(logging.WARNING)
+# we don't need the info messages
 # from this library
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    # formatter="%(asctime)s %(levelname)s %(process)s %(thread)s %(funcName)s():%(lineno)d %(message)s"
     handlers=[
         logging.FileHandler("canvasrobot.log"),
         RichHandler()
@@ -72,19 +71,6 @@ class DibsaRetrieveError(Error):
     pass
 
 
-@define
-class Grade:
-    stud_name: str
-    stud_id: str
-    final_score: float
-    final_grade: float
-
-@define
-class ExaminationDTO:
-    course_id: int
-    course_name: str
-    name:str
-
 
 @define
 class LabelType:
@@ -111,54 +97,6 @@ class Profile:
     # lti_user_id str)
 
 
-# noinspection PyCallingNonCallable,PyRedeclaration,PyTypeChecker
-# AnswerOptions = dict[str, int]  # answer_text, answer_weigth
-@define
-class Answer:
-    """canvas answer see for a complete list of (valid) fields
-    https://canvas.instructure.com/doc/api/quiz_questions.html
-    #:~:text=An%20Answer-,object,-looks%20like%3A
-    """
-    answer_html: str
-    answer_weight: int
-
-
-@define
-class QuestionDTO:
-    answers: list[Answer]
-    question_name: str = ""
-    question_type: str = 'multiple_choice_question'  # another option is 'essay question'
-    question_text: str = ''
-    points_possible: str = '1.0'
-    correct_comments: str = ''
-    incorrect_comments: str = ''
-    neutral_comments: str = ''
-    correct_comments_html: str = ''
-    incorrect_comments_html: str = ''
-    neutral_comments_html: str = ''
-
-@define
-class Stats:
-    quiz_ids: list[int] = []
-    question_ids: list[int] = []
-
-
-@define
-class CourseMetadata:
-    nr_modules: int
-    nr_module_items: int
-    nr_pages: int
-    nr_assignments: int
-    nr_quizzes: int
-    nr_files: int
-    assignments_summary: str
-    examinations_summary: str
-    examination_candidates: str
-    # nr_collaborations: int
-
-    # #ext_urls: int
-    # avr_len_assignments: int
-
 
 # noinspection PyTypeChecker,PyUnresolvedReferences,PyCallingNonCallable
 class CanvasRobot(object):
@@ -170,7 +108,8 @@ class CanvasRobot(object):
         self.queue = msg_queue
         config = CanvasConfig(reset_api_keys=reset_api_keys)
         self.canvas = canvasapi.Canvas(config.url, config.api_key)
-        self.admin = self.canvas.get_account(config.admin_id) if config.admin_id else None
+        self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
+            else None
         db_path = os.path.join(os.getcwd(),'databases')
         if not os.path.exists(db_path):
             # Create a new directory because it does not exist
@@ -183,11 +122,13 @@ class CanvasRobot(object):
         self.actions = []
 
     def add_to_queue(self, msg, value):
-        self.queue.put((msg,value))
+        if self.queue:
+            self.queue.put((msg,value))
     def lookup_teachers_db(self):
         db = self.db
         teachers = db((db.course2user.role == 'T') &
-                      (db.course2user.user == db.user.id)).select(db.user.user_id, distinct=True)
+                      (db.course2user.user == db.user.id)).select(db.user.user_id,
+                                                                  distinct=True)
         teacher_ids = [teacher.user_id for teacher in teachers]
         return teacher_ids
 
@@ -326,21 +267,26 @@ class CanvasRobot(object):
 
                             originality_str = (f"{submission.has_originality_report}"
                             if hasattr(submission, 'has_originality_report')
-                                               else "no has_originality_report attribute!\n")
-                            submissions_summary += (f"({idx}. {submission.submission_type}) graded "
+                            else "no has_originality_report attribute!\n")
+                            submissions_summary += (f"({idx}. "
+                                                    f"{submission.submission_type}) "
+                                                    f"graded "
                                                     f"{submission.grade} at "
                                                     f"{submission.graded_at}. "
                                                     f"Checked for plagiarism: "
                                                     f"{originality_str}"
                                                     )
                         else:
-                            submissions_summary+=(f"({idx}. {submission.submission_type}) graded "
+                            submissions_summary+=(f"({idx}. "
+                                                  f"{submission.submission_type}) "
+                                                  f"graded "
                                                   f"{submission.grade} at "
                                                   f"{submission.graded_at}\n")
             except BaseException as exc:
                 logging.exception(f"In Course:{course_id} {course.name} "
                                   f"Assignment {assignment.name} "
-                                  f"Submission nr {idx} type{submission.type} {exc}")
+                                  f"Submission nr {idx} "
+                                  f"type{submission.type} {exc}")
                 raise
 
 
@@ -359,9 +305,11 @@ class CanvasRobot(object):
                 examination_files+=1
                 examinations_summary+=f"\n{file.display_name}"
         if examination_files == 0:
-            examinations_summary += f"\nNo examination files in folder {EXAMINATION_FOLDER}"
+            examinations_summary += (f"\nNo examination files in "
+                                     f"folder {EXAMINATION_FOLDER}")
         else:
-            examinations_summary += f"\nTotal: {examination_files} examination files"
+            examinations_summary += (f"\nTotal: {examination_files} "
+                                     f"examination files")
         # was this working earlier 2.2.0 ?
         # try:
         #    collaborations = course.get_collaborations()
@@ -369,15 +317,15 @@ class CanvasRobot(object):
         #    nr_collaborations = len(list_of_collaborations)
         # except TypeError:
         #    nr_collaborations = None
-        md = CourseMetadata(nr_modules,
-                            nr_module_items,
-                            nr_pages,
-                            nr_assignments,
-                            nr_quizzes,
-                            nr_files,
-                            assignments_summary,
-                            examinations_summary,
-                            examination_candidates
+        md = CourseMetadata(nr_modules=nr_modules,
+                            nr_module_items=nr_module_items,
+                            nr_pages=nr_pages,
+                            nr_assignments=nr_assignments,
+                            nr_quizzes=nr_quizzes,
+                            nr_files=nr_files,
+                            assignments_summary=assignments_summary,
+                            examinations_summary=examinations_summary,
+                            examination_candidates=examination_candidates
                             )
         # examination_candidates: collect to create a canonical list
         return md
@@ -426,7 +374,7 @@ class CanvasRobot(object):
         if from_db:
             db = self.db
             courses = db(
-                (db.course.ac_year == self.year)).select(db.course.ALL)  # field id is db id
+                (db.course.ac_year == self.year)).select(db.course.ALL)
             # map(set_id_to_course_id, courses)
         else:
             courses = self.tst.get_courses()
@@ -443,8 +391,6 @@ class CanvasRobot(object):
             # only consider course if current year
             if str(course.sis_course_id)[:4] != str(self.year):
                 continue
-            # if not hasattr(course, "course_code") or course.course_code is None:
-            #     continue
             if course.course_code.startswith(osiris_id):
                 return course
 
@@ -464,7 +410,8 @@ class CanvasRobot(object):
         """
         try:
             user = self.canvas.get_user(search_name, 'sis_login_id')
-        except (canvasapi.exceptions.Unauthorized, canvasapi.exceptions.ResourceDoesNotExist):
+        except (canvasapi.exceptions.Unauthorized,
+                canvasapi.exceptions.ResourceDoesNotExist):
             if not email:
                 # out of options
                 self.errors.append(f'Unable to lookup {search_name} '
@@ -520,7 +467,7 @@ class CanvasRobot(object):
             try:
                 students_dibsa += self.get_students_dibsa(edu_id.upper())
             except DibsaRetrieveError as e:
-                logger.error(e)
+                logging.error(e)
                 raise
         for student in students_dibsa:
             username = student['username']
@@ -532,7 +479,8 @@ class CanvasRobot(object):
         return students_canvas
 
     def get_community(self, c_id):
-        # c_id can be an education (each education has a community) or acskills (all educations)
+        # c_id can be an education (each education has a community)
+        # or acskills (all educations)
         # Decide: add pm-ma to BA?
         #         pm-ulo to ULO?
         #         pm-macs to MACS
@@ -612,7 +560,8 @@ class CanvasRobot(object):
             header = reader.next()
             logging.debug(header)
             # db(db.teacher.id > 0).delete()
-            db(db.course2teacher.id > 0).delete()  # refresh all course2teacher couplings
+            db(db.course2teacher.id > 0).delete()
+            # refresh all course2teacher couplings
             for row in reader:
                 logging.debug(row)
                 assert len(row) == 7, "Error {0} fields!".format(len(row))
@@ -622,9 +571,9 @@ class CanvasRobot(object):
                                                                        ', ').split(', ')
                 # phases = row[4].split(', ')
                 course_id = db.course.update_or_insert(db.course.course_base == row[0],
-                                                       course_base=row[0],  # unique
+                                                       course_base=row[0],
                                                        name=row[1],
-                                                       teacher_names=row[2],  # redundant
+                                                       teacher_names=row[2],
                                                        ects=int(row[3]),
                                                        phase=row[4],
                                                        department=row[5],
@@ -660,7 +609,7 @@ class CanvasRobot(object):
             url = self.base_url + (self.commands[command].format(params)
                                    if params else self.commands[command])
         except Exception:
-            raise NotImplementedError("error in command {0} or params {1}".format(command, params))
+            raise NotImplementedError(f"error in command {command} or params {params}")
         else:
             try:
                 self.browser.get(url)
@@ -694,56 +643,15 @@ class CanvasRobot(object):
             bbcourse_id = db(db.bbcourse.bb_id ==
                              self.internal_id).select(db.bbcourse.id).first().id
         except AttributeError:
-            logging.info('course_id {0} not found in our database!'.format(self.internal_id))
+            logging.info(f'course_id {self.internal_id} not found in our database!')
             return -1
 
-        logging.info('updating users for course_id {0}'.format(bbcourse_id))
+        logging.info(f'updating users for course_id {bbcourse_id}')
         # show overview enrolled users
-        self.execute_command('enrolled_users', self.internal_id)  # assumes course selected
+        self.execute_command('enrolled_users', self.internal_id)
+        # assumes course is selected
         count = 0
         count_students = 0
-
-        #         roles = {"Teaching Assistant": "TA",
-        #                  "Instructor": "I",
-        #                  "Student": "S",
-        #                  "Guest": "G"}
-        # for tr in #PEOPLE self.browser.find_elements_by_
-        # xpath('//*[@id="listContainer_databody"]//tr'):  # all rows
-        #     username = ths[0].text
-        #     if 'preview' in username:
-        #         continue
-        #     logging.info('user {0} found'.format(username))
-        #     first_name, last_name, email, role =
-        #     (tds[2].text, tds[3].text, tds[4].text, tds[5].text)
-        #     # lookup role
-        #     try:
-        #         role = roles[role]
-        #     except IndexError:
-        #         logging.error("var roles incomplete '{}:...' missing".format(rol))
-        #     inserted_id = None
-        #     try:
-        #         inserted_id = db.bbuser.update_or_insert(db.bbuser.username == username,
-        #                                                  username=username,
-        #                                                  first_name=first_name,
-        #                                                  last_name=last_name,
-        #                                                  email=email)
-        #     except Exception as e:
-        #         logging.error("{0} error inserting user {1}".format(e, username))
-        #     else:
-        #         count += 1
-        #         if role == 'S':
-        #             count_students += 1
-        #     # lookup user_id if existing
-        #     bbuser_id = inserted_id if inserted_id \
-        #         else db(db.bbuser.username == username).select(db.bbuser.id).first().id
-        #
-        #     db.bbcourse2user.update_or_insert(((db.bbcourse2user.bbcourse == bbcourse_id) &
-        #                                        (db.bbcourse2user.bbuser == bbuser_id) &
-        #                                        (db.bbcourse2user.role == role)),
-        #                                       bbcourse=bbcourse_id,
-        #                                       bbuser=bbuser_id,
-        #                                       role=role)
-        #
         # connect user to this course in db
         db.commit()
 
@@ -822,7 +730,8 @@ class CanvasRobot(object):
             logging.info("#{} areas#".format(len(areas)))
             for area in areas:
                 self.goto_area(area)  # select content area
-                bb_files = self.get_files_from_area(level=0, area_name=area.name)  # recursive
+                bb_files = self.get_files_from_area(level=0, area_name=area.name)
+                # above function is recursive
                 logging.info("{} files#".format(len(bb_files)))
                 # test_file_name = bb_files[0].fname
                 self.update_documents(bb_files)  # record data files in database
@@ -834,10 +743,6 @@ class CanvasRobot(object):
     # noinspection PyRedeclaration
     def make_enroll_file(self, courseid):
         self.db.make_enroll_file(courseid)
-
-    # noinspection PyRedeclaration
-    def import_courses(self, filename="vakken" + NEXT_YEAR):
-        self.db.import_courses(filename)
 
     def _check_bb(self, suffix=NEXT_YEAR):
         self.db.check_bb(suffix)
@@ -883,7 +788,8 @@ class CanvasRobot(object):
         suffix = '-{}-'.format(self.year)
         try:
             items = db((db.bbcourse.course_suffix.contains(suffix)) &
-                       (db.bbdocument.bbcourse_id == db.bbcourse.id)).select(db.bbdocument.ALL)
+                       (db.bbdocument.bbcourse_id ==
+                        db.bbcourse.id)).select(db.bbdocument.ALL)
         except Exception as e:
             logging.error("*{0} error in get_list_of_ documents() "
                           "while selecting documents*".format(e))
@@ -958,7 +864,8 @@ class CanvasRobot(object):
         return records
     def get_course_from_database(self,course_id):
         db = self.db
-        record = db(db.course.course_id==course_id).select(db.course.ALL).first()
+        record = db(db.course.course_id==
+                    course_id).select(db.course.ALL).first()
         return record
     def delete_course_from_database(self,course_id):
         db = self.db
@@ -996,7 +903,8 @@ class CanvasRobot(object):
         logging.info(msg)
         num_rows = 0
         # tst = self.canvas.get_account(6)  # admin account
-        courses=[self.get_course(single_course),] if single_course else self.admin.get_courses()
+        courses=[self.get_course(single_course),] if single_course \
+            else self.admin.get_courses()
         num_courses = len(list(courses))
         max_number = max_number or num_courses
 
@@ -1021,7 +929,8 @@ class CanvasRobot(object):
                     continue
                 # print(teacher.name)
                 first_name, last_name, prefix = self.parse_sortable_name(teacher)
-                inserted_id = db.user.update_or_insert(db.user.username == teacher.login_id,
+                inserted_id = db.user.update_or_insert(db.user.username ==
+                                                       teacher.login_id,
                                                        user_id=teacher.id,
                                                        name=teacher.name,
                                                        first_name=first_name,
@@ -1031,15 +940,18 @@ class CanvasRobot(object):
                                                        email=teacher.email,
                                                        role='T')
                 teachers_ids.append(inserted_id or
-                                    db(db.user.username == teacher.login_id).select().first().id)
+                                    db(db.user.username ==
+                                       teacher.login_id).select().first().id)
             try:
-                # skips teachers with non-accepted invites (they don't have a login attribute)
+                # skips teachers with non-accepted invites
+                # (they don't have a login attribute)
                 teacher_logins = [teacher.login_id for teacher in teachers
                                   if hasattr(teacher, 'login_id')]
                 teacher_names = [teacher.name for teacher in teachers
                                  if hasattr(teacher, 'login_id')]
             except AttributeError as e:
-                msg = f"skipped teacher of {course.name} [{course.id}] due to {e}"
+                msg = (f"skipped teacher of {course.name} "
+                       f"[{course.id}] due to {e}")
                 logging.warning(msg)
                 continue
             logging.info("instructors: {0}".format(teacher_logins))  # instructors
@@ -1493,45 +1405,6 @@ class CanvasRobot(object):
 
         return stats
 
-    def create_quizzes_from_document(self, filename: str,
-                                     course_id: int,
-                                     question_format="Vraag {}.",
-                                     check_num_questions=None,
-                                     adjust_fontsize=True,
-                                     testrun=False):
-        """
-        :param adjust_fontsize: if true change fontsize
-        :param testrun: if true: print don't create
-        :param check_num_questions:
-        :param filename: filename of the Word document (docx) to process
-        :param course_id: Canvas course_id: the quizzes are added to this course
-        :param question_format: used to create the question name.
-        They will be numbered. Should contain '{}' is placehiolder
-        starting with 1
-        :return:
-        """
-        if '{}' not in question_format:
-            print(f"parameter 'question_format(={question_format})' "
-                  f"should contain {{}} als placeholder")
-            return False
-        for quiz_name, questions in w2q.parse_document_d2p(filename,
-                                                           check_num_questions,
-                                                           normalize_fontsize=adjust_fontsize):
-
-            if testrun:
-                return
-
-            msg, quiz_id = self.create_quiz(course_id=course_id,
-                                            title=quiz_name,
-                                            quiz_type="practice_quiz")
-            for index, (question_text, answers) in enumerate(questions, start=1):
-                answers_asdict = [attrs.asdict(answer) for answer in answers]
-                question_dto = QuestionDTO(question_name=question_format.format(index),
-                                           question_text=question_text,
-                                           answers=answers_asdict)
-                self.create_question(course_id=COURSE_ID,
-                                      quiz_id=quiz_id,
-                                      question_dto=question_dto)
 
     def get_course_tab_by_label(self, course_id: int, label: str):
         course = self.get_course(course_id)

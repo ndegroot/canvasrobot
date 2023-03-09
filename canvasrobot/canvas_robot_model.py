@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import datetime
 import os
 
 #try:
@@ -12,11 +12,8 @@ import logging.config
 
 from attrs import define
 import keyring
-import keyring.util.platform_ as keyring_platform
 # for UI use rich of tkinter
 from rich.prompt import Prompt
-from rich.console import Console
-import tkinter as tk
 from tkinter import simpledialog
 
 
@@ -49,7 +46,6 @@ class CanvasConfig:
         """ ask for canvas api key and url , uses keyring to
         store them in a safe space"""
 
-        values = dict()
         for field in self.api_fields:
             value = self.get_value(field["msg"], field["key"])
             self.__setattr__(field["key"], value)
@@ -59,8 +55,8 @@ class CanvasConfig:
         if value in (None, ""):
             value = simpledialog.askstring("Input",
                                            msg,
-                                           parent=app_window) if self.app_window \
-                else Prompt.ask(msg)
+                                           parent=self.app_window) \
+                if self.app_window else Prompt.ask(msg)
             keyring.set_password(self.namespace, entry, value)
             value = keyring.get_password(self.namespace, entry)
         return value

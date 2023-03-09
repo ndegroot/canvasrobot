@@ -1,4 +1,3 @@
-import typing
 import collections
 import re
 import canvasapi
@@ -38,12 +37,12 @@ class User:
             r'(\((?P<init>[\w.]+.)\)))?(\s*(?P<prefix>\w+))?')
         d = re.match(pat, source)
         if not d:
-            return res.ResponseFailure.create_exception_error("sortable_name failed parsing")
+            raise Exception("sortable_name failed parsing")
 
         self.first_name, self.prefix, self.last_name = (d['first_name_par'] or
                                                         d['first_name'], d['prefix'] or
                                                         '', d['last_name'])
-        return res.ResponseSuccess.create_default_success()
+
 
 
 

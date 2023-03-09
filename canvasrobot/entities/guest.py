@@ -1,6 +1,3 @@
-import typing
-import collections
-import re
 import canvasapi
 
 

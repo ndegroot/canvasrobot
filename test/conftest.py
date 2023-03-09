@@ -2,12 +2,9 @@ import os
 import sys
 # import keyring
 import pytest
-import requests
-import yaml
 import configparser
 import getpass
 import pathlib
-import logging
 
 
 @pytest.fixture(scope='session')
@@ -37,7 +34,8 @@ def user_input(request):
         capture_manager = request.config.pluginmanager.getplugin('capturemanager')
         capture_manager.suspend_global_capture(in_=True)
 
-        answer = getpass.getpass(prompt=notification) if hide_pw else input(notification)
+        answer = getpass.getpass(prompt=notification) if hide_pw \
+            else input(notification)
 
         # resume capture after question have been asked
         capture_manager.resume_global_capture()
@@ -56,7 +54,7 @@ def sso_config(suspend_capture):
     :return: parser object for ini file
     """
     dirs = os.path.split(__file__)[0]
-    appname = dirs.split(os.path.sep)[-2]
+    dirs.split(os.path.sep)[-2]
 
     sso_config = configparser.ConfigParser()
     home = str(pathlib.Path.home())
