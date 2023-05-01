@@ -274,7 +274,7 @@ class CanvasRobot(object):
                                                     f"{submission.grade} at "
                                                     f"{submission.graded_at}. "
                                                     f"Checked for plagiarism: "
-                                                    f"{originality_str}"
+                                                    f"{originality_str}\n"
                                                     )
                         else:
                             submissions_summary+=(f"({idx}. "
