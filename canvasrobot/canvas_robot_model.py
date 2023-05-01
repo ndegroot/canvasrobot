@@ -198,7 +198,8 @@ class LocalDAL(DAL):
                           Field('last_name', 'string'),
                           Field('email', 'string'),
                           Field('primary_role', 'string', requires=valid_roles),
-                          format='%(first_name)s %(prefix)s %(last_name)s[%(username)s]',
+                          format=('%(first_name)s %(prefix)s '
+                                  '%(last_name)s[%(username)s]'),
                           singular='User',
                           plural='Users')
 
@@ -209,7 +210,8 @@ class LocalDAL(DAL):
                                                              self.course._format)),
                           Field('user',
                                 'reference user',
-                                requires=validators.IS_IN_DB(self, 'user.id', self.user._format)),
+                                requires=validators.IS_IN_DB(self, 'user.id',
+                                                             self.user._format)),
                           Field('role', 'string',
                                 requires=valid_roles))
 

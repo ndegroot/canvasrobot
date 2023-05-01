@@ -1,7 +1,7 @@
 import io
 import json
 import mimetypes
-import os
+import osstatus
 import re
 import time
 from collections import namedtuple
@@ -193,7 +193,7 @@ class CanvasRobot(object):
         """":param user """
         role_teacher = ENROLLMENT_TYPES['teacher']
         # check if param: user is teacher in one of the TST courses
-        for course in self.tst.get_courses():
+        for course in self.admin.get_courses():
             enrollments = course.get_enrollments()
             for enrollment in enrollments:
                 if enrollment.role == role_teacher and enrollment.user == user:
@@ -377,7 +377,7 @@ class CanvasRobot(object):
                 (db.course.ac_year == self.year)).select(db.course.ALL)
             # map(set_id_to_course_id, courses)
         else:
-            courses = self.tst.get_courses()
+            courses = self.admin.get_courses()
             courses = filter(cur_year_active, courses)
         # for index, c in enumerate(courses):
         #     print(index, c.name)
@@ -386,9 +386,9 @@ class CanvasRobot(object):
     def get_course_using_osiris_id(self, osiris_id):
         """
         :returns first TST course with sisid starting with
-        osiris_id in current ac. year"""
-        for course in self.tst.get_courses():
-            # only consider course if current year
+        osiris_id in selected  year"""
+        for course in self.admin.get_courses():
+            # only consider course if selected year
             if str(course.sis_course_id)[:4] != str(self.year):
                 continue
             if course.course_code.startswith(osiris_id):
@@ -506,7 +506,7 @@ class CanvasRobot(object):
         # todo: select courses using membership of education using osiris ids
         print(user)
         # idea: filter course of an education using db
-        for course in self.tst.get_courses():
+        for course in self.admin.get_courses():
             # only insert/update course if current year
             if str(course.sis_course_id)[:4] != str(self.year):
                 continue
@@ -524,7 +524,7 @@ class CanvasRobot(object):
         except canvasapi.exceptions.ResourceDoesNotExist:
             return f"User {username} not found in Canvas"
 
-        for course in self.tst.get_courses():
+        for course in self.admin.get_courses():
             # only get a course if current year
             if str(course.sis_course_id)[:4] != str(self.year):
                 continue
@@ -837,24 +837,29 @@ class CanvasRobot(object):
     def get_examinations_from_database(self, candidate=False):
         db = self.db
         # include the NULL values
-        qry = ((db.examination.id>0)&
+        qry = ((db.course.ac_year==self.year)&
+               (db.examination.course==db.course.course_id)& # join examination courses
                (db.examination.candidate==
-                candidate)) if candidate else (db.examination.id > 0)
+                candidate)) if candidate else ((db.course.ac_year==self.year)&
+                                               (db.examination.course==db.course.course_id))
         records = db( qry ).select(db.examination.ALL)
         return records
     def get_courses_from_database(self,
                                   skip_courses_without_students=False,
+                                  add_list=None,
                                   qry=None,
                                   orderby=None,
                                   fields=None):
         db = self.db
         if skip_courses_without_students:
-            cur_qry = (db.course.nr_students>0)
+            cur_qry = (db.course.nr_students>0) &(db.course.ac_year==self.year)
         else:
-            cur_qry = (db.course.id>0)
+            cur_qry = (db.course.ac_year==self.year)
+
 
         if qry:
             cur_qry = cur_qry & qry
+
 
         fields = fields or db.course.ALL
         orderby=orderby or db.course.course_code
@@ -874,6 +879,7 @@ class CanvasRobot(object):
         return result
 
     def update_record_db(self, search_field, search_id, table ,field, value):
+
         db = self.db
         ud_fields = {field: value}
         #row = db(db[table][search_field] == search_id).select()
@@ -884,10 +890,12 @@ class CanvasRobot(object):
     # noinspection PyUnusedLocal
     def update_database_from_canvas(self,
                                     single_course=None,
+                                    single_course_osiris_id=None,
                                     max_number=None,
                                     stop_list=None):
         """
-            Using the canvasapi to read the list of TST courses and
+            Using the canvasapi to read the TST courses for the selected year
+            (or a single course using canvas cours_id or osiris id) and
             - record internal_id course_id, fname and instructors in the
             table course
             - put teacher details in table user
@@ -898,13 +906,17 @@ class CanvasRobot(object):
             """
 
         db = self.db
-        msg= f'open courselist for year {self.year} - {self.year+1}'
+        msg= f'open course(s) for year {self.year} - {self.year+1}'
         self.add_to_queue(msg, None)
         logging.info(msg)
         num_rows = 0
-        # tst = self.canvas.get_account(6)  # admin account
-        courses=[self.get_course(single_course),] if single_course \
-            else self.admin.get_courses()
+        if single_course_osiris_id:
+            courses= [self.get_course_using_osiris_id(single_course_osiris_id)]
+        elif single_course:
+            courses = [self.get_course(single_course)]
+        else:
+            courses = self.admin.get_courses()
+
         num_courses = len(list(courses))
         max_number = max_number or num_courses
 
