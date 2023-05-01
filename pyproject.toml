@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "canvasrobot"
-version = "0.6.0"
+version = "0.6.1"
 description = "Library which uses Canvasapi https://canvasapi.readthedocs.io/en/stable/getting-started.html to provide a CanvasRobot class."
 authors = ["Nico de Groot <ndegroot0@gmail.com>",]
 readme = "README.md"
@@ -23,6 +23,8 @@ mock = "*"
 pylint = "*"
 ruff = "*"
 #
+[tool.poetry_bumpversion.file."canvasrobot/__init__.py"]
+
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
