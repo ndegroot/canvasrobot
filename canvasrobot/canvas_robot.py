@@ -1,7 +1,7 @@
 import io
 import json
 import mimetypes
-import osstatus
+import os
 import re
 import time
 from collections import namedtuple
@@ -837,11 +837,11 @@ class CanvasRobot(object):
     def get_examinations_from_database(self, candidate=False):
         db = self.db
         # include the NULL values
-        qry = ((db.course.ac_year==self.year)&
-               (db.examination.course==db.course.course_id)& # join examination courses
-               (db.examination.candidate==
-                candidate)) if candidate else ((db.course.ac_year==self.year)&
-                                               (db.examination.course==db.course.course_id))
+        qry = ((db.course.ac_year == self.year)&
+               (db.examination.course == db.course.course_id)& # join examination courses
+               (db.examination.candidate ==
+                candidate)) if candidate else ((db.course.ac_year == self.year)&
+                                               (db.examination.course == db.course.course_id))
         records = db( qry ).select(db.examination.ALL)
         return records
     def get_courses_from_database(self,
@@ -852,38 +852,38 @@ class CanvasRobot(object):
                                   fields=None):
         db = self.db
         if skip_courses_without_students:
-            cur_qry = (db.course.nr_students>0) &(db.course.ac_year==self.year)
+            cur_qry = (db.course.nr_students>0) &(db.course.ac_year == self.year)
         else:
-            cur_qry = (db.course.ac_year==self.year)
-
+            cur_qry = (db.course.ac_year == self.year)
 
         if qry:
             cur_qry = cur_qry & qry
 
-
         fields = fields or db.course.ALL
-        orderby=orderby or db.course.course_code
+        orderby = orderby or db.course.course_code
         records = db(cur_qry).select(db.course.ALL,
                                      orderby=orderby)
 
         return records
-    def get_course_from_database(self,course_id):
+
+    def get_course_from_database(self, course_id):
         db = self.db
-        record = db(db.course.course_id==
+        record = db(db.course.course_id ==
                     course_id).select(db.course.ALL).first()
         return record
-    def delete_course_from_database(self,course_id):
+
+    def delete_course_from_database(self, course_id):
         db = self.db
-        result = db(db.course.course_id==course_id).delete()
+        result = db(db.course.course_id == course_id).delete()
         db.commit()
         return result
 
-    def update_record_db(self, search_field, search_id, table ,field, value):
+    def update_record_db(self, search_field, search_id, table, field, value):
 
         db = self.db
         ud_fields = {field: value}
-        #row = db(db[table][search_field] == search_id).select()
-        #row2 = db(db.course.course_id == search_id).select()
+        # row = db(db[table][search_field] == search_id).select()
+        # row2 = db(db.course.course_id == search_id).select()
         db(db[table][search_field] == search_id).update(**ud_fields)
         db.commit()
 
