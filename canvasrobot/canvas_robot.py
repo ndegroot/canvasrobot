@@ -106,6 +106,13 @@ class CanvasRobot(object):
     def __init__(self, reset_api_keys=False, msg_queue=None):
         # self._year = AC_YEAR - years_back
         self.queue = msg_queue
+
+        db_path = os.path.join(os.getcwd(), 'databases')
+        if not os.path.exists(db_path):
+            # Create a new directory because it does not exist
+            os.makedirs(db_path)
+        self.db = LocalDAL()
+
         config = CanvasConfig(reset_api_keys=reset_api_keys)
         try:
             self.canvas = canvasapi.Canvas(config.url, config.api_key)
@@ -115,15 +122,10 @@ class CanvasRobot(object):
         except Exception as e:
             self.canvas = None
 
-        db_path = os.path.join(os.getcwd(), 'databases')
-        if not os.path.exists(db_path):
-            # Create a new directory because it does not exist
-            os.makedirs(db_path)
-        self.db = LocalDAL()
         self.internal_id = None
-        logging.info("Canvasrobot started")
         self.errors = []
         self.actions = []
+        logging.info("Canvasrobot started")
 
     @property
     def year(self):
