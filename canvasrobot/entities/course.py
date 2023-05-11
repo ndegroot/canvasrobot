@@ -30,6 +30,11 @@ class SearchTextInCourseDTO:
     course: str = ""
     search: str = ""
 
+@define
+class ExaminationDTO:
+    course_id: int
+    course_name: str
+    name:str
 
 @define
 class CourseMetadata:
@@ -41,7 +46,7 @@ class CourseMetadata:
     nr_files: int
     assignments_summary: str
     examinations_summary: str
-    examination_candidates: str
+    examination_records: list[ExaminationDTO]
     # nr_collaborations: int
 
     # #ext_urls: int
@@ -54,8 +59,3 @@ class Grade:
     final_score: float
     final_grade: float
 
-@define
-class ExaminationDTO:
-    course_id: int
-    course_name: str
-    name:str

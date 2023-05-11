@@ -12,6 +12,9 @@ from attrs import define, asdict
 import canvasapi
 import requests
 import logging
+# from functools import lru_cache
+from pymemcache.client import base
+from pymemcache import serde
 
 from rich.logging import RichHandler
 from rich.progress import track
@@ -21,7 +24,7 @@ from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder
-
+from socket import gaierror, timeout
 from .canvas_robot_model import AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES, \
     EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig, EXAMINATION_FOLDER
 from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, Stats
@@ -97,13 +100,135 @@ class Profile:
     # lti_user_id str)
 
 
-# noinspection PyTypeChecker,PyUnresolvedReferences,PyCallingNonCallable,GrazieInspection
+try:
+    MEMCACHED = base.Client(('localhost', 11211),
+                            connect_timeout=1,
+                            timeout=0.2,
+                            serde=serde.pickle_serde)
+    result = MEMCACHED.set('canvasbot','Running')
+    running = MEMCACHED.get('canvasrobot')
+except (gaierror,timeout):
+    MEMCACHED = False
+
+# noinspection PyCallingNonCallable,GrazieInspection
+def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
+    def get_md():
+        course = canvas.get_course(course_id)
+        modules = course.get_modules()
+        nr_modules = len(list(modules))
+        nr_module_items = 0
+        nr_ext_urls = 0
+        for module in modules:
+            module_items = module.get_module_items()
+            item_count_ext_url = filter(lambda i: i.type == "ext_url", module_items)
+            nr_ext_urls += len(list(item_count_ext_url))
+            nr_module_items += module.items_count
+        pages = course.get_pages()
+        pages = filter(lambda p: p.title[0:3] != 'UVT', pages)
+        nr_pages = len(list(pages))
+        assignments = course.get_assignments()
+        assignments_summary = "Assignments:\n"
+        examinations = []
+        for assignment in assignments:
+            if assignment.name not in ignore_assignment_names:
+                assignments_summary += f"{assignment.name}"
+                examination = ExaminationDTO(course_id,
+                                             course.name,
+                                             assignment.name)
+
+                examinations.append(examination)
+            else:
+                assignments_summary += f"ignored: {assignment.name}"
+                # if show_all else ""
+
+            submissions_summary = ""
+            submissions = assignment.get_submissions()
+            # try:
+            for idx, submission in enumerate(submissions, start=1):
+                if assignment.name not in ignore_assignment_names:
+                    if submission.submission_type == "online_upload":
+
+                        originality_str = (f"{submission.has_originality_report}"
+                                           if hasattr(submission,
+                                                      'has_originality_report')
+                                           else "no Originality Report!")
+                        submissions_summary += (f"({idx}. "
+                                                f"{submission.submission_type}) "
+                                                f"graded "
+                                                f"{submission.grade} at "
+                                                f"{submission.graded_at}. "
+                                                f"Checked for plagiarism: "
+                                                f"{originality_str}\n"
+                                                )
+                    else:
+                        submissions_summary += (f"({idx}. "
+                                                f"{submission.submission_type}) "
+                                                f"graded "
+                                                f"{submission.grade} at "
+                                                f"{submission.graded_at}\n")
+            assignments_summary += f"\n{submissions_summary}"
+        nr_assignments = len(list(assignments))
+        quizzes = course.get_quizzes()
+        nr_quizzes = len(list(quizzes))
+        files = course.get_files()
+        nr_files = len(list(files))
+        # check for uploaded examination files
+        examinations_summary = ""
+        examination_files = 0
+        examination_folder_found = False
+        for file in files:
+            folder = course.get_folder(file.folder_id)
+            if f"/{EXAMINATION_FOLDER}" in folder.full_name:
+                examination_folder_found = True
+                examination_files += 1
+                examinations_summary += f"{file.display_name}\n"
+        if examination_files == 0:
+            if examination_folder_found:
+                examinations_summary += (f"No examination files in "
+                                     f"folder {EXAMINATION_FOLDER}\n")
+            else:
+                examinations_summary += f"No folder {EXAMINATION_FOLDER}\n"
+        else:
+            examinations_summary += (f"\nTotal: {examination_files} "
+                                     f"examination files"
+                                     f"in {EXAMINATION_FOLDER}")
+        # was this working earlier 2.2.0 ?
+        # try:
+        #    collaborations = course.get_collaborations()
+        #    list_of_cols = [c for c in collaborations]
+        #    nr_collaborations = len(list_of_collaborations)
+        # except TypeError:
+        #    nr_collaborations = None
+        md = CourseMetadata(nr_modules=nr_modules,
+                            nr_module_items=nr_module_items,
+                            nr_pages=nr_pages,
+                            nr_assignments=nr_assignments,
+                            nr_quizzes=nr_quizzes,
+                            nr_files=nr_files,
+                            assignments_summary=assignments_summary,
+                            examinations_summary=examinations_summary,
+                            examination_records=examinations
+                            )
+        return md
+
+    if MEMCACHED:
+        memc_key = f"{course_id}{hash(ignore_assignment_names)}"
+        md = MEMCACHED.get(memc_key)
+        if md:
+            return md
+        MEMCACHED.set(memc_key, md := get_md())
+        return md
+    return get_md()
+
+
+# noinspection PyTypeChecker
 class CanvasRobot(object):
+    """" uses caching since """
     db: callable
     TOT_WEIGHT: int = 100
-    _year: int = AC_YEAR
+    _year: int = AC_YEAR # the current academic year
 
-    def __init__(self, reset_api_keys=False, msg_queue=None):
+    def __init__(self, reset_api_keys=False, msg_queue=None, is_testing=False, fake_migrate_all=False):
         # self._year = AC_YEAR - years_back
         self.queue = msg_queue
 
@@ -111,16 +236,16 @@ class CanvasRobot(object):
         if not os.path.exists(db_path):
             # Create a new directory because it does not exist
             os.makedirs(db_path)
-        self.db = LocalDAL()
+        self.db = LocalDAL(is_testing=is_testing, fake_migrate_all=fake_migrate_all)
 
         config = CanvasConfig(reset_api_keys=reset_api_keys)
-        try:
-            self.canvas = canvasapi.Canvas(config.url, config.api_key)
-            self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
+        self.canvas = canvasapi.Canvas(config.url, config.api_key)
+        if not self.canvas:
+            logging.error("login Canvas failed")
+            exit(1)
+        self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
                 else None
-            self.teacher_ids = self.lookup_teachers_db()
-        except Exception as e:
-            self.canvas = None
+        self.teacher_ids = self.lookup_teachers_db()
 
         self.internal_id = None
         self.errors = []
@@ -132,7 +257,11 @@ class CanvasRobot(object):
         return self._year
 
     @year.setter
-    def years_back(self, years_back):
+    def year(self, year):
+        self._year = year
+
+    @year.setter
+    def year(self, years_back):
         self._year = AC_YEAR-years_back
 
     @property
@@ -203,7 +332,7 @@ class CanvasRobot(object):
         profile = self.create_profile(user.get_profile())
         return user, profile
 
-    def get_user_profile_anr(self, anr: str):
+    def get_user_profile_anr(self, anr):
         user = self.canvas.get_user(anr, 'sis_user_id')
         profile = self.create_profile(user.get_profile())
         return user, profile
@@ -237,121 +366,24 @@ class CanvasRobot(object):
             # print("There are {} modules in page".format(len(page)))
         return
 
-    def course_metadata(self, course_id, examination_names=None, show_candidates=False):
+    def course_metadata(self, course_id, ignore_assignment_names):
         """
         return dict with metadata of this course
         as a dict.
+        only the submissions of assigments present in examination_names
+        are reported in assignments_summary
         :returns md: CourseMetadata"""
-        examination_names = examination_names or []
-        course = self.get_course(course_id)
-        modules = course.get_modules()
+        ignore_assignment_names = ignore_assignment_names or []
+        result = course_metadata_memcached(course_id, self.canvas, frozenset(ignore_assignment_names))
+        return result
 
-        nr_modules = len(list(modules))
-        nr_module_items = 0
-        nr_ext_urls = 0
-        for module in modules:
-            # print(dir(module))
-            # print("page:{}".format(module))
-            module_items = module.get_module_items()
-            # print("page module_items:{}".format(module_items))
-            # for item in module_items:
-            #    print(item.type)
-            item_count_ext_url = filter(lambda i: i.type == "ext_url", module_items)
-            nr_ext_urls += len(list(item_count_ext_url))
-            nr_module_items += module.items_count
-        pages = course.get_pages()
-        pages = filter(lambda p: p.title[0:3] != 'UVT', pages)
-        nr_pages = len(list(pages))
-        assignments = course.get_assignments()
-        assignments_summary = "Assignments:\n"
-        examination_candidates = []
-        for assignment in assignments:
-            if assignment.name in examination_names:
-                assignments_summary += f"Examination assignment: {assignment.name}"
-            else:
-                assignments_summary += f"Examination candidate: {assignment.name}" \
-                    if show_candidates else ""
 
-                candidate = ExaminationDTO(course_id,
-                                           course.name,
-                                           assignment.name)
-
-                examination_candidates.append(candidate)
-            submissions_summary = ""
-            submissions = assignment.get_submissions()
-            try:
-                for idx, submission in enumerate(submissions, start=1):
-                    if assignment.name in examination_names:
-                        if submission.submission_type == "online_upload":
-
-                            originality_str = (f"{submission.has_originality_report}"
-                                               if hasattr(submission, 'has_originality_report')
-                                               else "no has_originality_report attribute!\n")
-                            submissions_summary += (f"({idx}. "
-                                                    f"{submission.submission_type}) "
-                                                    f"graded "
-                                                    f"{submission.grade} at "
-                                                    f"{submission.graded_at}. "
-                                                    f"Checked for plagiarism: "
-                                                    f"{originality_str}\n"
-                                                    )
-                        else:
-                            submissions_summary += (f"({idx}. "
-                                                    f"{submission.submission_type}) "
-                                                    f"graded "
-                                                    f"{submission.grade} at "
-                                                    f"{submission.graded_at}\n")
-            except BaseException as exc:
-                logging.exception(f"In Course:{course_id} {course.name} "
-                                  f"Assignment {assignment.name} "
-                                  f"Submission nr {idx} "
-                                  f"type{submission.type} {exc}")
-                raise
-
-            assignments_summary += f"\n{submissions_summary}"
-        nr_assignments = len(list(assignments))
-        quizzes = course.get_quizzes()
-        nr_quizzes = len(list(quizzes))
-        files = course.get_files()
-        nr_files = len(list(files))
-        # check for uploaded examination files
-        examinations_summary = ""
-        examination_files = 0
-        for file in files:
-            folder = course.get_folder(file.folder_id)
-            if f"/{EXAMINATION_FOLDER}" in folder.full_name:
-                examination_files += 1
-                examinations_summary += f"\n{file.display_name}"
-        if examination_files == 0:
-            examinations_summary += (f"\nNo examination files in "
-                                     f"folder {EXAMINATION_FOLDER}")
-        else:
-            examinations_summary += (f"\nTotal: {examination_files} "
-                                     f"examination files")
-        # was this working earlier 2.2.0 ?
-        # try:
-        #    collaborations = course.get_collaborations()
-        #    list_of_cols = [c for c in collaborations]
-        #    nr_collaborations = len(list_of_collaborations)
-        # except TypeError:
-        #    nr_collaborations = None
-        md = CourseMetadata(nr_modules=nr_modules,
-                            nr_module_items=nr_module_items,
-                            nr_pages=nr_pages,
-                            nr_assignments=nr_assignments,
-                            nr_quizzes=nr_quizzes,
-                            nr_files=nr_files,
-                            assignments_summary=assignments_summary,
-                            examinations_summary=examinations_summary,
-                            examination_candidates=examination_candidates
-                            )
-        # examination_candidates: collect to create a canonical list
-        return md
+    #@lru_cache # 'takes 2 positinal arg 3 are given'
 
     def enroll_in_course(self,
                          search: str,
                          course_id: int,
-                         username: str,
+                         username,
                          enrollment_type: str) -> str:
         if search:
             try:
@@ -847,15 +879,36 @@ class CanvasRobot(object):
         db.commit()
         return counters
 
-    def get_examinations_from_database(self, candidate=False):
+    def get_examinations_from_database(self,
+                                       single_course=None,
+                                       orderby=None,
+                                       candidate=False):
+        """ get all assignments/examinations in the current year
+        """
         db = self.db
         # include the NULL values
-        qry = ((db.course.ac_year == self.year) &
-               (db.examination.course == db.course.course_id) &  # join examination courses
-               (db.examination.candidate ==
-                candidate)) if candidate else ((db.course.ac_year == self.year) &
-                                               (db.examination.course == db.course.course_id))
-        records = db(qry).select(db.examination.ALL)
+        if single_course:
+            qry = ((db.course.course_id == single_course) &
+                   (db.examination.course == db.course.course_id) &  # join examination courses
+                   (db.examination.candidate ==
+                    candidate)) \
+                if candidate else ((db.course.course_id == single_course) &
+                                   (db.examination.course == db.course.course_id))
+        else:
+            qry = ((db.course.ac_year == self.year) &
+                   (db.examination.course == db.course.course_id) &  # join examination courses
+                   (db.examination.candidate ==
+                    candidate)) if candidate else ((db.course.ac_year == self.year) &
+                                                   (db.examination.course == db.course.course_id))
+        orderby = orderby or db.course.course_code
+        records = db(qry).select(db.examination.id,
+                                 db.examination.course,
+                                 db.examination.course_name,
+                                 db.examination.name,
+                                 db.examination.ignore,
+                                 db.course.course_code,
+                                 db.course.course_id,
+                                 orderby=orderby)
         return records
 
     def get_courses_from_database(self,
@@ -888,16 +941,18 @@ class CanvasRobot(object):
     def delete_course_from_database(self, course_id):
         db = self.db
         result = db(db.course.course_id == course_id).delete()
+        result2 = db(db.examination.course==course_id).delete()
         db.commit()
-        return result
+        return result and result2
 
-    def update_record_db(self, search_field, search_id, table, field, value):
+    def update_record_db(self, qry, field, value):
 
         db = self.db
         ud_fields = {field: value}
         # row = db(db[table][search_field] == search_id).select()
         # row2 = db(db.course.course_id == search_id).select()
-        db(db[table][search_field] == search_id).update(**ud_fields)
+        #db(db[table][search_field] == search_id).update(**ud_fields)
+        db(qry).update(**ud_fields)
         db.commit()
 
     # noinspection PyUnusedLocal
@@ -908,7 +963,7 @@ class CanvasRobot(object):
                                     stop_list=None):
         """
             Using the canvasapi to read the TST courses for the selected year
-            (or a single course using canvas cours_id or osiris id) and
+            (or a single course using canvas course_id or the siris id) and
             - record internal_id course_id, fname and instructors in the
             table course
             - put teacher details in table user
@@ -919,7 +974,9 @@ class CanvasRobot(object):
             """
 
         db = self.db
-        msg = f'open course(s) for year {self.year} - {self.year + 1}'
+        msg = f'Open single course {single_course}'\
+            if single_course \
+            else f'open course(s) for year {self.year} - {self.year + 1}'
         self.add_to_queue(msg, None)
         logging.info(msg)
         num_rows = 0
@@ -938,7 +995,8 @@ class CanvasRobot(object):
 
             # only insert/update course if current year unless single_course
             if (str(course.sis_course_id)[:4] != str(self.year)
-                    or course.name.endswith('conclude')) and not single_course:
+                    or course.name.endswith('conclude')) \
+                    and not (single_course or single_course_osiris_id):
                 continue
             if course.name in (stop_list or []):
                 continue
@@ -984,11 +1042,13 @@ class CanvasRobot(object):
             inserted_id = None
             format_str = "%Y-%m-%dT%H:%M:%SZ"
             creation_date = datetime.strptime(course.created_at, format_str)
+            ignore_examinations = self.get_examinations_from_database(single_course=single_course)
+            # filter: we need only our course.id with candidate False
+            ignore_examination_names = [row.name for row in ignore_examinations
+                                           if (row.course == course.id and row.ignore)]
+            md = self.course_metadata(course.id, frozenset(ignore_examination_names))
+
             course_id = None
-            examinations = self.get_examinations_from_database(candidate=False)
-            canonical_examination_names = [row.name for row in examinations
-                                           if (row.course == course.id and not row.candidate)]
-            md = self.course_metadata(course.id, canonical_examination_names)
             try:
                 course_id = db.course.update_or_insert(db.course.course_id == course.id,
                                                        course_id=course.id,
@@ -1009,23 +1069,24 @@ class CanvasRobot(object):
                                                        examinations_summary=md.examinations_summary,
                                                        teachers=teacher_logins,
                                                        teachers_names=teacher_names)
+                db.commit() # really needed here??
             except Exception as e:
                 err = f"{e} error inserting {course.name}"
                 self.add_to_queue("<InsertError>", err)
                 logging.exception(err)
                 raise
-            if course_id:
+            if course_id: # a new course has been inserted in the db
                 db(db.course.id == inserted_id).update(status=2)
             else:
                 course_id = db(db.course.course_id == course.id).select().first().id
-            for cand in md.examination_candidates:
+            for item in md.examination_records:
                 # candidate is True if course_name in examination_list else False
-                db.examination.update_or_insert((db.examination.course ==
-                                                 cand.course_id) &
-                                                (db.examination.name == cand.name),
-                                                course=cand.course_id,
-                                                course_name=cand.course_name,
-                                                name=cand.name,
+                _ = db.examination.update_or_insert((db.examination.course ==
+                                                     item.course_id) &
+                                                    (db.examination.name == item.name),
+                                                    course=item.course_id,
+                                                    course_name=item.course_name,
+                                                    name=item.name,
                                                 )
             for user_id in teachers_ids:
                 db.course2user.update_or_insert((db.course2user.course == course_id) &

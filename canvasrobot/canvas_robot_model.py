@@ -53,6 +53,7 @@ class CanvasConfig:
     def get_value(self, msg, entry):
         value = keyring.get_password(self.namespace, entry)
         if value in (None, ""):
+            # noinspection PyTypeChecker
             value = simpledialog.askstring("Input",
                                            msg,
                                            parent=self.app_window) \
@@ -138,14 +139,14 @@ valid_roles = validators.IS_IN_SET({"T": "Teacher",
 
 # noinspection PyCallingNonCallable,PyProtectedMember
 class LocalDAL(DAL):
-    def __init__(self, is_testing=False):
+    def __init__(self, is_testing=False, fake_migrate_all=False):
         url = 'sqlite://testing.sqlite' if is_testing else 'sqlite://storage.sqlite'
         super(LocalDAL, self).__init__(url,
                                        folder='databases',
                                        migrate=True,
                                        migrate_enabled=True,
                                        fake_migrate=False,
-                                       fake_migrate_all=False)
+                                       fake_migrate_all=fake_migrate_all)
         self.define_table('course',
                           Field('course_id', 'integer'),
                           Field('course_code', 'string'),
@@ -174,7 +175,10 @@ class LocalDAL(DAL):
                           plural='LMS courses',
                           format='%(name)s[%(teacher_names)s]')
 
-        # to record a controlled set of names referring to examination assigments
+        # To record a controlled set of names referring to examination assigments
+        # We override the (sound) pyDAL principle to use course->id as reference
+        # because we need the canvas course_id for browserlinks
+        # Note that Pydal create a foreign key to course->id we need to change using DBrowser
         self.define_table('examination',
                           Field('course',
                                 'reference course',
@@ -182,9 +186,9 @@ class LocalDAL(DAL):
                                                              self.course._format)),
                           Field('course_name', 'string'), # a bit redundant
                           Field('name', 'string'),
-                          Field('candidate', 'boolean',
-                                label="Only Examination when False",
-                                default=True),
+                          Field('ignore', 'boolean',
+                                label="Skip unused/unusable assignments",
+                                default=False),
                           format='%(name)s',
                           singular='Examination name',
                           plural='Examination names')

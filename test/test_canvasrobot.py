@@ -1,13 +1,11 @@
-from canvasrobot import CanvasRobot
 import mock
 import builtins
 
 
-def tst_init():
+def tst_init(cr):
     """ something with capture"""
     inputs = iter(['https://tilburguniversity.instructure.com', 'a key', 8])
     with mock.patch.object(builtins, 'input', lambda _: next(inputs)):
-        cr = CanvasRobot()
         assert cr
 
 
@@ -36,56 +34,60 @@ TEST_COURSE_NR_EXAMINATIONS = 4 # first create a test course in Canvas
 # - with assigments and at least one graded submission with file upload
 # - and at least one file in folder 'Tentamens' in Files
 
-cr = CanvasRobot()
 
 
-def test_getcourses_current_user():
+
+def test_getcourses_current_user(cr):
     """ for current user get the courses"""
     courses = cr.get_courses("teacher")
     assert len(list(courses)) == NR_COURSES_USER
 
 
-def tst_getcourses_admin():
+def tst_getcourses_admin(cr):
     """ for the admin accpunt (if available) get the courses"""
     if ADMIN_ID:
         courses = cr.get_courses_in_account()
         assert len(list(courses)) == NR_COURSES_ADMIN
 
-def test_api_valid():
+def test_api_valid(cr):
     """you need -s parameter in pytest once to record API key in keyring"""
 
     user = cr.get_user(8)
     assert user.id==8
 
-def test_course_metadata():
-    """ test if course_metadata collects the rigth data from the test course"""
-    canonical_examination_names = ["deeltentamen",]
-    md = cr.course_metadata(TEST_COURSE, canonical_examination_names)
+def test_course_metadata(cr):
+    """ test if course_metadata collects the right data from the test course"""
+    ignore_examination_names = ["Opdracht 1",]
+    md = cr.course_metadata(TEST_COURSE, ignore_examination_names)
     assert md.assignments_summary, "field assigments_summary not there"
     assert f"graded {TEST_COURSE_NR_ASSIGNMENTS}" in md.assignments_summary, \
         "assignments not reported in assigments summary"
-    assert md.examination_candidates, "field examination_candidates not there"
+    assert md.examination_records, "field examination_record not there"
     assert f"Total: {TEST_COURSE_NR_EXAMINATIONS}" in md.examinations_summary, \
         "examination files not (complete) in summary"
 
-def test_update_database_from_canvas():
-    """ delete the test couirse from local database,
-     update (which should add it agian)
+def test_update_database_from_canvas(cr):
+    """ delete the test course from local database if its there,
+     update testcourse (which should add again)
      check if it's back """
     cr.delete_course_from_database(TEST_COURSE)
     cr.update_database_from_canvas(single_course=TEST_COURSE)
+
     course = cr.get_course_from_database(TEST_COURSE)
     assert course.course_id==TEST_COURSE, "course not added"
     assert course.assignments_summary, "field assigments_summary not there"
     assert f"graded {TEST_COURSE_NR_ASSIGNMENTS}" in course.assignments_summary, \
-        "assignments not reported in assigments summary"
+        "no of assignments not reported in assigments summary"
     #assert course.examination_candidates, "field examionation_candidates not there"
     assert f"Total: {TEST_COURSE_NR_EXAMINATIONS}" in course.examinations_summary, \
         "examination files not (complete) in summary"
 
-def test_update_record_db():
+
+def test_update_record_db(cr):
+    cr.update_database_from_canvas(single_course=TEST_COURSE)
     cr.update_record_db( "course_id", TEST_COURSE, "course", "examinations_ok", True)
     course = cr.get_course_from_database(TEST_COURSE)
+    assert course, f"Course {TEST_COURSE} not found"
     assert course.examinations_ok is True
     cr.update_record_db( "course_id", TEST_COURSE, "course", "examinations_ok", False)
     course = cr.get_course_from_database(TEST_COURSE)
