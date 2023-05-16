@@ -13,9 +13,13 @@ import canvasapi
 import requests
 import logging
 # from functools import lru_cache
-from pymemcache.client import base
-from pymemcache import serde
-
+try:
+    from pymemcache.client import base
+    from pymemcache import serde
+    MEMCACHED = True
+except ImportError:
+    print("No memcaching")
+    MEMCACHED = False
 from rich.logging import RichHandler
 from rich.progress import track
 from canvasapi.course import Course
@@ -100,15 +104,16 @@ class Profile:
     # lti_user_id str)
 
 
-try:
-    MEMCACHED = base.Client(('localhost', 11211),
-                            connect_timeout=1,
-                            timeout=0.2,
-                            serde=serde.pickle_serde)
-    result = MEMCACHED.set('canvasbot','Running')
-    running = MEMCACHED.get('canvasrobot')
-except (gaierror,timeout):
-    MEMCACHED = False
+if MEMCACHED == True:
+    try:
+        MEMCACHED = base.Client(('localhost', 11211),
+                                connect_timeout=1,
+                                timeout=0.2,
+                                serde=serde.pickle_serde)
+        result = MEMCACHED.set('canvasbot','Running')
+        running = MEMCACHED.get('canvasrobot')
+    except (gaierror,timeout):
+        MEMCACHED = False
 
 # noinspection PyCallingNonCallable,GrazieInspection
 def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
