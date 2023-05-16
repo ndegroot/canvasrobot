@@ -370,8 +370,8 @@ class CanvasRobot(object):
         """
         return dict with metadata of this course
         as a dict.
-        only the submissions of assigments present in examination_names
-        are reported in assignments_summary
+        ignore the submissions of assigments present in ignore_assignment_names
+        the others are reported in assignments_summary
         :returns md: CourseMetadata"""
         ignore_assignment_names = ignore_assignment_names or []
         result = course_metadata_memcached(course_id, self.canvas, frozenset(ignore_assignment_names))
@@ -721,7 +721,7 @@ class CanvasRobot(object):
                      c.nr_module_items,
                      c.nr_pages,
                      c.nr_assignments) for c in courses]
-        columns = ("nrModules", "nrModuleItems", ",nrPAges", "nr_assignments")
+        columns = ("nrModules", "nrModuleItems", ",nrPages", "nr_assignments")
         return features, labels, columns
 
     def get_bbcourses(self, single_course=None):
@@ -1003,8 +1003,9 @@ class CanvasRobot(object):
             if idx > max_number:
                 break
             logging.debug("course: {}".format(course.name))  # course
-            students = course.get_users(enrollment_type="student")
-            nr_students = len(list(students))
+            students = course.get_users(enrollment_type="student", )
+            # remove student with name=='Test Student'
+            nr_students = len(list(filter(lambda s: s.name != 'Test student', list(students))))
             teachers = course.get_users(enrollment_type="teacher")
             teachers_ids = []
             for teacher in teachers:
