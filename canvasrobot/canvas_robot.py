@@ -104,7 +104,7 @@ class Profile:
     # lti_user_id str)
 
 
-if MEMCACHED == True:
+if MEMCACHED:
     try:
         MEMCACHED = base.Client(('localhost', 11211),
                                 connect_timeout=1,
