@@ -1,10 +1,5 @@
 from datetime import datetime
 import os
-
-#try:
-#    from gluon import DAL, Field, XML, HTML
-#    from gluon.storage import Storage
-#except ImportError:
 from pydal import DAL, Field, validators
 import yaml
 import logging
@@ -171,6 +166,8 @@ class LocalDAL(DAL):
                           Field('examinations_ok', 'boolean', default=False),
                           Field('examinations_findings', 'string'),
                           Field('examinations_details_osiris', 'string'),
+                          Field('gradebook', 'upload', uploadfield='gradebook_file'),
+                          Field('gradebook_file', 'blob'),
                           singular='LMS course',
                           plural='LMS courses',
                           format='%(name)s[%(teacher_names)s]')
