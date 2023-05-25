@@ -1,3 +1,4 @@
+from typing import Optional, Union, Any
 import io
 import json
 import mimetypes
@@ -9,29 +10,29 @@ from datetime import datetime
 
 import attrs
 from attrs import define, asdict
-import canvasapi
+import canvasapi  # type: ignore
 import requests
 import logging
 # from functools import lru_cache
-try:
-    from pymemcache.client import base
-    from pymemcache import serde
-    MEMCACHED = True
+try:  # type: ignore
+    from pymemcache import serde  # type: ignore
+    from pymemcache.client import base  # type: ignore
+    MEMCACHED: Union[base.Client, bool] = True
 except ImportError:
     print("No memcaching")
     MEMCACHED = False
 from rich.logging import RichHandler
 from rich.progress import track
-from canvasapi.course import Course
-from canvasapi.util import combine_kwargs
-from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment
-from openpyxl.utils import get_column_letter
-from openpyxl.workbook import Workbook
-from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder
+from canvasapi.course import Course  # type: ignore
+from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment # type: ignore
+from canvasapi.util import combine_kwargs # type: ignore
+from openpyxl.utils import get_column_letter  # type: ignore
+from openpyxl.workbook import Workbook  # type: ignore
+from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder # type: ignore
 from socket import gaierror, timeout
-from .canvas_robot_model import AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES, \
-    EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig, EXAMINATION_FOLDER
-from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, Stats
+from .canvas_robot_model import (AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES,  # type: ignore
+                                 EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig, EXAMINATION_FOLDER)  # type: ignore
+from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, Stats # type: ignore
 
 logging.getLogger("canvasapi").setLevel(logging.WARNING)
 # we don't need the info messages
@@ -94,7 +95,7 @@ class Profile:
     sortable_name: str
     avatar_url: str
     title: str
-    bio: any  # can be N
+    bio: Optional[str]  # can be N
     primary_email: str
     integration_id: str
     time_zone: str
@@ -229,7 +230,7 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
 # noinspection PyTypeChecker
 class CanvasRobot(object):
     """" uses caching since """
-    db: callable
+    db: Any
     TOT_WEIGHT: int = 100
     _year: int = AC_YEAR # the current academic year
 
@@ -296,7 +297,9 @@ class CanvasRobot(object):
         :returns canvas courses for current user in role"""
         return self.canvas.get_courses(enrollment_type=enrollment_type)
 
-    def get_courses_in_account(self, by_teachers: list = None, this_year=True):
+    def get_courses_in_account(self,
+                               by_teachers: Optional[list]=None,
+                               this_year=True):
         """
         get all course in account here use_is has the role/type [enrollment_type]
         :param by_teachers: list of teacher id's
@@ -453,7 +456,7 @@ class CanvasRobot(object):
             return rows[0].course_id
         return 0
 
-    def search_user(self, search_name: str, email: str = None):
+    def search_user(self, search_name: str, email: str = ""):
         """
         :param search_name:
         :param email to search on email
@@ -729,7 +732,7 @@ class CanvasRobot(object):
         columns = ("nrModules", "nrModuleItems", ",nrPages", "nr_assignments")
         return features, labels, columns
 
-    def get_bbcourses(self, single_course=None):
+    def get_bbcourses(self, single_course:str=""):
         """ for all courses: get coursename and other fields from db
         :param single_course: used for testing
         :return: rows/list of dicts """
@@ -760,7 +763,7 @@ class CanvasRobot(object):
             row.count = row[count]
         return rows
 
-    def update_all_file_urls(self, max_courses: int = None, single_course=None) -> str:
+    def update_all_file_urls(self, max_courses: int = 0, single_course=None) -> str:
         """ for all courses harvest the attachments/files urls from Bb
         :param single_course: for testing
         :param max_courses:
@@ -769,25 +772,25 @@ class CanvasRobot(object):
         courses = self.get_bbcourses(single_course=single_course)
         logging.info("{} courses to scan".format(len(courses)))
 
-        total_files = []
+        total_files: Optional[list] = []
         for count, course in enumerate(courses):
             if max_courses and count == max_courses:
                 logging.info("Stopped after {} courses".format(max_courses))
                 break
             logging.info("{}/{}:{}".format(count + 1, len(courses), course.name))
-            self.goto(course.bb_id)
-            areas = self.get_areas()  # top level areas (menu buttons)
-            logging.info("#{} areas#".format(len(areas)))
-            for area in areas:
-                self.goto_area(area)  # select content area
-                bb_files = self.get_files_from_area(level=0, area_name=area.name)
-                # above function is recursive
-                logging.info("{} files#".format(len(bb_files)))
-                # test_file_name = bb_files[0].fname
-                self.update_documents(bb_files)  # record data files in database
-                total_files += bb_files
+            self.get_course(course.id) # check this!
+            # areas = self.get_areas()  # top level areas (menu buttons)
+            # logging.info("#{} areas#".format(len(areas)))
+            # for area in areas:
+            #     self.goto_area(area)  # select content area
+            #     bb_files = self.get_files_from_area(level=0, area_name=area.name)
+            #     # above function is recursive
+            #     logging.info("{} files#".format(len(bb_files)))
+            #     # test_file_name = bb_files[0].fname
+            #     self.update_documents(bb_files)  # record data files in database
+            #     total_files += bb_files
         return "{} courses scanned {} files found".format(len(courses),
-                                                          len(total_files))
+                                                          len(total_files) if total_files else 0)
 
     # the delegates ---
     # noinspection PyRedeclaration

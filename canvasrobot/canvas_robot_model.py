@@ -1,6 +1,6 @@
 from datetime import datetime
 import os
-from pydal import DAL, Field, validators
+from pydal import DAL, Field, validators  # type: ignore
 import yaml
 import logging
 import logging.config

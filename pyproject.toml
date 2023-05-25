@@ -23,7 +23,10 @@ mock = "*"
 pylint = "*"
 ruff = "*"
 pymemcache = "*"
-#
+mypy = "*"
+types-requests = "*"
+types-pyyaml = "*"
+
 [tool.poetry_bumpversion.file."canvasrobot/__init__.py"]
 
 [build-system]
