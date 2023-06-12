@@ -111,6 +111,7 @@ NEXT_YEAR = '-{0}-{1}'.format(AC_YEAR + 1, AC_YEAR + 2)
 
 EXAMINATION_FOLDER = "Tentamens"
 
+
 def load_config(default_path='ca_robot.yaml'):
     """
     Setup configuration:
@@ -134,10 +135,10 @@ valid_roles = validators.IS_IN_SET({"T": "Teacher",
 
 # noinspection PyCallingNonCallable,PyProtectedMember
 class LocalDAL(DAL):
-    def __init__(self, is_testing=False, fake_migrate_all=False):
+    def __init__(self, is_testing=False, fake_migrate_all=False, folder="databases"):
         url = 'sqlite://testing.sqlite' if is_testing else 'sqlite://storage.sqlite'
         super(LocalDAL, self).__init__(url,
-                                       folder='databases',
+                                       folder=folder,
                                        migrate=True,
                                        migrate_enabled=True,
                                        fake_migrate=False,
@@ -181,7 +182,7 @@ class LocalDAL(DAL):
                                 'reference course',
                                 requires=validators.IS_IN_DB(self, 'course.course_id',
                                                              self.course._format)),
-                          Field('course_name', 'string'), # a bit redundant
+                          Field('course_name', 'string'),  # a bit redundant
                           Field('name', 'string'),
                           Field('ignore', 'boolean',
                                 label="Skip unused/unusable assignments",
@@ -226,7 +227,7 @@ class LocalDAL(DAL):
                           Field('course_id', 'integer'),
                           Field('user_id', 'integer'),
                           Field('submission_type', 'string'),
-                          Field('url','string'),
+                          Field('url', 'string'),
                           Field('grade', 'string'),
                           Field('graded_at', 'string'),
                           format='%(submission_id)s-%(assigment_id)s %(user_id)s',

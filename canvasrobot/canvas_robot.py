@@ -13,43 +13,53 @@ from attrs import define, asdict
 import canvasapi  # type: ignore
 import requests
 import logging
+
 # from functools import lru_cache
 try:  # type: ignore
     from pymemcache import serde  # type: ignore
     from pymemcache.client import base  # type: ignore
+
     MEMCACHED: Union[base.Client, bool] = True
 except ImportError:
     print("No memcaching")
     MEMCACHED = False
-from rich.logging import RichHandler
+#  from rich.logging import RichHandler
 from rich.progress import track
 from canvasapi.course import Course  # type: ignore
-from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment # type: ignore
-from canvasapi.util import combine_kwargs # type: ignore
+from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment  # type: ignore
+from canvasapi.util import combine_kwargs  # type: ignore
 from openpyxl.utils import get_column_letter  # type: ignore
 from openpyxl.workbook import Workbook  # type: ignore
-from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder # type: ignore
+from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder  # type: ignore
 from socket import gaierror, timeout
 from .canvas_robot_model import (AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES,  # type: ignore
-                                 EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig, EXAMINATION_FOLDER)  # type: ignore
-from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, Stats # type: ignore
+                                 EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig,
+                                 EXAMINATION_FOLDER)  # type: ignore
+from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, \
+    Stats  # type: ignore
 
 logging.getLogger("canvasapi").setLevel(logging.WARNING)
 # we don't need the info messages
 # from this library
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("canvasrobot.log"),
-        RichHandler()
-        # logging.StreamHandler(sys.stdout)
-    ]
-)
+# the local module has
+logging.getLogger(__name__).setLevel(logging.WARNING)
 
+
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format="%(asctime)s [%(levelname)s] %(message)s",
+#     handlers=[
+#         logging.FileHandler("canvasrobot.log"),
+#         RichHandler()
+#         # logging.StreamHandler(sys.stdout)
+#     ]
+# )
+#
 
 # noinspection PyProtectedMember
+
+
 def file_update(file, **kwargs):
     """
         Updates a file.
@@ -58,7 +68,7 @@ def file_update(file, **kwargs):
         :rtype: :class:`canvasapi.file.File`
         """
     response = file._requester.request(
-        "PUT", "files/{}".format(file.id), _kwargs=combine_kwargs(**kwargs)
+            "PUT", "files/{}".format(file.id), _kwargs=combine_kwargs(**kwargs)
     )
 
     if "name" in response.json():
@@ -111,12 +121,15 @@ if MEMCACHED:
                                 connect_timeout=1,
                                 timeout=0.2,
                                 serde=serde.pickle_serde)
-        result = MEMCACHED.set('canvasbot','Running')
+        result = MEMCACHED.set('canvasbot', 'Running')
         running = MEMCACHED.get('canvasrobot')
-    except (gaierror,timeout):
+    except (gaierror, timeout):
         MEMCACHED = False
 
+
 # noinspection PyCallingNonCallable,GrazieInspection
+
+
 def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
     def get_md():
         course = canvas.get_course(course_id)
@@ -191,7 +204,7 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
         if examination_files == 0:
             if examination_folder_found:
                 examinations_summary += (f"No examination files in "
-                                     f"folder {EXAMINATION_FOLDER}\n")
+                                         f"folder {EXAMINATION_FOLDER}\n")
             else:
                 examinations_summary += f"No folder {EXAMINATION_FOLDER}\n"
         else:
@@ -232,17 +245,20 @@ class CanvasRobot(object):
     """" uses caching since """
     db: Any
     TOT_WEIGHT: int = 100
-    _year: int = AC_YEAR # the current academic year
+    _year: int = AC_YEAR  # the current academic year
 
-    def __init__(self, reset_api_keys=False, msg_queue=None, is_testing=False, fake_migrate_all=False):
-        # self._year = AC_YEAR - years_back
+    def __init__(self,
+                 reset_api_keys: bool = False,
+                 msg_queue=None,
+                 is_testing: bool = False,
+                 db_folder: str = "",
+                 fake_migrate_all: bool = False):
         self.queue = msg_queue
 
-        db_path = os.path.join(os.getcwd(), 'databases')
-        if not os.path.exists(db_path):
-            # Create a new directory because it does not exist
-            os.makedirs(db_path)
-        self.db = LocalDAL(is_testing=is_testing, fake_migrate_all=fake_migrate_all)
+        db_folder = db_folder or os.path.join(os.getcwd(), 'databases')
+        self.db = LocalDAL(is_testing=is_testing,
+                           fake_migrate_all=fake_migrate_all,
+                           folder=db_folder)
 
         config = CanvasConfig(reset_api_keys=reset_api_keys)
         self.canvas = canvasapi.Canvas(config.url, config.api_key)
@@ -250,12 +266,12 @@ class CanvasRobot(object):
             logging.error("login Canvas failed")
             exit(1)
         self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
-                else None
+            else None
         self.teacher_ids = self.lookup_teachers_db()
 
         self.internal_id = None
-        self.errors = []
-        self.actions = []
+        self.errors: list[str] = []
+        self.actions: list[str] = []
         logging.info("Canvasrobot started")
 
     @property
@@ -266,13 +282,9 @@ class CanvasRobot(object):
     def year(self, year):
         self._year = year
 
-    @year.setter
-    def year(self, years_back):
-        self._year = AC_YEAR-years_back
-
     @property
     def full_ac_year(self):
-        return f"{self._year - 1}-{self._year}"
+        return f"{self._year}-{self._year+1}"
 
     def add_to_queue(self, msg, value):
         if self.queue:
@@ -298,7 +310,7 @@ class CanvasRobot(object):
         return self.canvas.get_courses(enrollment_type=enrollment_type)
 
     def get_courses_in_account(self,
-                               by_teachers: Optional[list]=None,
+                               by_teachers: Optional[list] = None,
                                this_year=True):
         """
         get all course in account here use_is has the role/type [enrollment_type]
@@ -382,11 +394,9 @@ class CanvasRobot(object):
         the others are reported in assignments_summary
         :returns md: CourseMetadata"""
         ignore_assignment_names = ignore_assignment_names or []
-        result = course_metadata_memcached(course_id, self.canvas, frozenset(ignore_assignment_names))
+        result = course_metadata_memcached(course_id, self.canvas,
+                                           frozenset(ignore_assignment_names))
         return result
-
-
-    #@lru_cache # 'takes 2 positinal arg 3 are given'
 
     def enroll_in_course(self,
                          search: str,
@@ -428,7 +438,7 @@ class CanvasRobot(object):
         if from_db:
             db = self.db
             courses = db(
-                (db.course.ac_year == self.year)).select(db.course.ALL)
+                    (db.course.ac_year == self.year)).select(db.course.ALL)
             # map(set_id_to_course_id, courses)
         else:
             courses = self.admin.get_courses()
@@ -505,11 +515,11 @@ class CanvasRobot(object):
 
     def get_students_for_community(self, c_id):
 
-        community_edu_ids = {'banl': ['banl', 'pm-ma', 'pm-ulo'],  # nl
-                             'bauk': ['bauk', 'pm-macs'],  # uk
-                             'ma': ['ma'],
-                             'ulo': ['ulo'],
-                             'macs': ['macs'],
+        community_edu_ids = {'banl'    : ['banl', 'pm-ma', 'pm-ulo'],  # nl
+                             'bauk'    : ['bauk', 'pm-macs'],  # uk
+                             'ma'      : ['ma'],
+                             'ulo'     : ['ulo'],
+                             'macs'    : ['macs'],
                              'acskills': [edu.lower() for edu in EDUCATIONS]
                              }
         # edu_ids = [edu.lower() for edu in EDUCATIONS]
@@ -732,7 +742,7 @@ class CanvasRobot(object):
         columns = ("nrModules", "nrModuleItems", ",nrPages", "nr_assignments")
         return features, labels, columns
 
-    def get_bbcourses(self, single_course:str=""):
+    def get_bbcourses(self, single_course: str = ""):
         """ for all courses: get coursename and other fields from db
         :param single_course: used for testing
         :return: rows/list of dicts """
@@ -778,7 +788,7 @@ class CanvasRobot(object):
                 logging.info("Stopped after {} courses".format(max_courses))
                 break
             logging.info("{}/{}:{}".format(count + 1, len(courses), course.name))
-            self.get_course(course.id) # check this!
+            self.get_course(course.id)  # check this!
             # areas = self.get_areas()  # top level areas (menu buttons)
             # logging.info("#{} areas#".format(len(areas)))
             # for area in areas:
@@ -829,8 +839,8 @@ class CanvasRobot(object):
                                                    area=c_file.area_name)
             except Exception as e:
                 logging.error(
-                    "'{0}' error in update_documents() while inserting "
-                    "'{1}' in table Document".format(e, c_file.name))
+                        "'{0}' error in update_documents() while inserting "
+                        "'{1}' in table Document".format(e, c_file.name))
             else:
                 db.commit()
 
@@ -935,10 +945,13 @@ class CanvasRobot(object):
 
         fields = fields or db.course.ALL
         orderby = orderby or db.course.course_code
-        records = db(cur_qry).select(fields,
+        try:
+            records = db(cur_qry).select(fields,
                                      orderby=orderby)
-
-        return records
+        except binascii.Error:
+            logging.exception("Wrong content in image field?")
+        else:
+            return records
 
     def get_course_from_database(self, course_id):
         db = self.db
@@ -949,7 +962,7 @@ class CanvasRobot(object):
     def delete_course_from_database(self, course_id):
         db = self.db
         result = db(db.course.course_id == course_id).delete()
-        result2 = db(db.examination.course==course_id).delete()
+        result2 = db(db.examination.course == course_id).delete()
         db.commit()
         return result and result2
 
@@ -959,7 +972,7 @@ class CanvasRobot(object):
         ud_fields = {field: value}
         # row = db(db[table][search_field] == search_id).select()
         # row2 = db(db.course.course_id == search_id).select()
-        #db(db[table][search_field] == search_id).update(**ud_fields)
+        # db(db[table][search_field] == search_id).update(**ud_fields)
         db(qry).update(**ud_fields)
         db.commit()
 
@@ -982,7 +995,7 @@ class CanvasRobot(object):
             """
 
         db = self.db
-        msg = f'Open single course {single_course}'\
+        msg = f'Open single course {single_course}' \
             if single_course \
             else f'open course(s) for year {self.year} - {self.year + 1}'
         self.add_to_queue(msg, None)
@@ -1003,7 +1016,7 @@ class CanvasRobot(object):
 
             # only insert/update course if current year unless single_course
             if (str(course.sis_course_id)[:4] != str(self.year)
-                    or course.name.endswith('conclude')) \
+                or course.name.endswith('conclude')) \
                     and not (single_course or single_course_osiris_id):
                 continue
             if course.name in (stop_list or []):
@@ -1054,7 +1067,7 @@ class CanvasRobot(object):
             ignore_examinations = self.get_examinations_from_database(single_course=single_course)
             # filter: we need only our course.id with candidate False
             ignore_examination_names = [row.name for row in ignore_examinations
-                                           if (row.course == course.id and row.ignore)]
+                                        if (row.course == course.id and row.ignore)]
             md = self.course_metadata(course.id, frozenset(ignore_examination_names))
 
             course_id = None
@@ -1078,13 +1091,13 @@ class CanvasRobot(object):
                                                        examinations_summary=md.examinations_summary,
                                                        teachers=teacher_logins,
                                                        teachers_names=teacher_names)
-                db.commit() # really needed here??
+                db.commit()  # really needed here??
             except Exception as e:
                 err = f"{e} error inserting {course.name}"
                 self.add_to_queue("<InsertError>", err)
                 logging.exception(err)
                 raise
-            if course_id: # a new course has been inserted in the db
+            if course_id:  # a new course has been inserted in the db
                 db(db.course.id == inserted_id).update(status=2)
             else:
                 course_id = db(db.course.course_id == course.id).select().first().id
@@ -1095,8 +1108,8 @@ class CanvasRobot(object):
                                                     (db.examination.name == item.name),
                                                     course=item.course_id,
                                                     course_name=item.course_name,
-                                                    name=item.name,
-                                                )
+                                                    name=item.name
+                                                    )
             for user_id in teachers_ids:
                 db.course2user.update_or_insert((db.course2user.course == course_id) &
                                                 (db.course2user.user == user_id),
@@ -1229,8 +1242,8 @@ class CanvasRobot(object):
         assert ", " in user.sortable_name, "sortable_name should contain comma"
         source = user.sortable_name
         pat = re.compile(
-            r'(?P<last_name>[\w \-]+), (?P<first_name>\w+)\s?((\((?P<first_name_par>\w+)\))|'
-            r'(\((?P<init>[\w.]+.)\)))?(\s*(?P<prefix>\w+))?')
+                r'(?P<last_name>[\w \-]+), (?P<first_name>\w+)\s?((\((?P<first_name_par>\w+)\))|'
+                r'(\((?P<init>[\w.]+.)\)))?(\s*(?P<prefix>\w+))?')
         d = re.match(pat, source)
         if not d:
             print("!!!Failed parsing!!!")
@@ -1352,25 +1365,25 @@ class CanvasRobot(object):
                             LabelType(label='score', field_type='percentage'),
                             LabelType(label='grade', field_type='grade')]
         styles = {
-            # list below is not complete
-            # see https://www.web2pyref.com/reference/field-type-database-field-types
-            'datetime': NamedStyle(name='date', number_format='yyyy-mm-dd'),
-            'id': NamedStyle(name='int', number_format='#,##0'),
-            'integer': NamedStyle(name='int', number_format='#,##0'),
-            'price': NamedStyle(name='money', font=Font(italic=True),
-                                fill=PatternFill(fill_type='solid', fgColor='404040'),
-                                number_format=u'[$\u20ac-1] #,##0.00 '),  # unicode for €
-            'double': NamedStyle(name='double', number_format='#0.000000'),
-            'grade': NamedStyle(name='grade', number_format='#0.00'),
-            'percentage': NamedStyle(name='score', number_format='#0.00'),
-            'string': NamedStyle(name='std',
-                                 alignment=Alignment(horizontal='left',
-                                                     vertical='bottom',
-                                                     text_rotation=0,
-                                                     wrap_text=False,
-                                                     shrink_to_fit=False,
-                                                     indent=0)),
-            'text': None
+                # list below is not complete
+                # see https://www.web2pyref.com/reference/field-type-database-field-types
+                'datetime'  : NamedStyle(name='date', number_format='yyyy-mm-dd'),
+                'id'        : NamedStyle(name='int', number_format='#,##0'),
+                'integer'   : NamedStyle(name='int', number_format='#,##0'),
+                'price'     : NamedStyle(name='money', font=Font(italic=True),
+                                         fill=PatternFill(fill_type='solid', fgColor='404040'),
+                                         number_format=u'[$\u20ac-1] #,##0.00 '),  # unicode for €
+                'double'    : NamedStyle(name='double', number_format='#0.000000'),
+                'grade'     : NamedStyle(name='grade', number_format='#0.00'),
+                'percentage': NamedStyle(name='score', number_format='#0.00'),
+                'string'    : NamedStyle(name='std',
+                                         alignment=Alignment(horizontal='left',
+                                                             vertical='bottom',
+                                                             text_rotation=0,
+                                                             wrap_text=False,
+                                                             shrink_to_fit=False,
+                                                             indent=0)),
+                'text'      : None
         }
 
         dest_filename = f'TST {course}.xlsx'
@@ -1598,15 +1611,15 @@ class CanvasRobot(object):
                         folder.update(locked=True)
                         folder_changes += 1
                         logging.info(
-                            f"Folder '{foldername}' is now unpublished"
-                            f" in course {course.name}")
+                                f"Folder '{foldername}' is now unpublished"
+                                f" in course {course.name}")
                     else:
                         logging.warning(f"Folder '{foldername}' is published "
                                         f"in course {course.name}({course.id})!")
                 else:
                     logging.debug(
-                        f"Folder '{foldername}' was already "
-                        f"unpublished/locked in course {course.name}")
+                            f"Folder '{foldername}' was already "
+                            f"unpublished/locked in course {course.name}")
                 if files_too:
                     unpublish_items(folder)
                     # for f in folder.get_files():
