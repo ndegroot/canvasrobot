@@ -47,10 +47,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-
 # noinspection PyProtectedMember
-
-
 def file_update(file, **kwargs):
     """
         Updates a file.
@@ -425,7 +422,7 @@ class CanvasRobot(object):
             return f"Enroll of {user} in {course} as {enrollment_type} failed:{e}"
         return f"Enrolled {user} in {course} as {enrollment_type}"
 
-    def get_all_active_tst_courses(self, from_db=True):
+    def get_all_active_courses(self, from_db=True):
         """"":returns list of all TST course canvas course """
 
         def cur_year_active(course):
@@ -1538,7 +1535,7 @@ class CanvasRobot(object):
 
     def create_folder_in_all_courses(self, foldername):
 
-        for course in track(self.get_all_active_tst_courses(from_db=False),
+        for course in track(self.get_all_active_courses(from_db=False),
                             description="All current courses...",
                             console=self.console):
             self.create_folder_in_course_files(course.id, foldername)
@@ -1547,7 +1544,7 @@ class CanvasRobot(object):
                                            foldername: str,
                                            files_too: bool = False,
                                            check_only: bool = False):
-        for course in track(self.get_all_active_tst_courses(from_db=False),
+        for course in track(self.get_all_active_courses(from_db=False),
                             description=(f"Checking all current"
                                          f" courses for folder '{foldername}'..." if check_only
                             else f"Unpublish all published folder {foldername}..."),
