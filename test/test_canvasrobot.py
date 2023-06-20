@@ -17,7 +17,7 @@ import builtins
 
 ADMIN_ID = 6  # If no admin_id available: set to 0
 A_TEACHER_ID = 8  # choose a teacher/teacher_id from Canvas
-NR_COURSES_USER = 5  # lookup number of courses for this teacher
+NR_COURSES_TEACHER = 5  # lookup number of courses for this teacher
 NR_COURSES_ADMIN = 129  # lookup using canvas website
 TEST_COURSE = 34  # first create a test course in Canvas
 TEST_COURSE_NR_ASSIGNMENTS = 8
@@ -34,13 +34,13 @@ def tst_init(cr):
         assert cr
 
 
-def test_getcourses_current_user(cr):
-    """ for current user get the courses"""
+def test_getcourses_current_teacher(cr):
+    """ for current teacher get the courses"""
     courses = cr.get_courses("teacher")
-    assert len(list(courses)) == NR_COURSES_USER
+    assert len(list(courses)) == NR_COURSES_TEACHER
 
 
-def tst_getcourses_admin(cr):
+def test_getcourses_admin(cr):
     """ for the admin accpunt (if available) get the courses"""
     if ADMIN_ID:
         courses = cr.get_courses_in_account()
@@ -68,13 +68,13 @@ def test_course_metadata(cr):
 
 def test_update_database_from_canvas(cr):
     """ delete the test course from local database if its there,
-     update testcourse (which should add again)
+     update testcourse (which should add it again)
      check if it's back """
     cr.delete_course_from_database(TEST_COURSE)
     cr.update_database_from_canvas(single_course=TEST_COURSE)
 
     course = cr.get_course_from_database(TEST_COURSE)
-    assert course.course_id == TEST_COURSE, "course not added"
+    assert course.course_id == TEST_COURSE, "course not found, not added"
     assert course.assignments_summary, "field assigments_summary not there"
     assert f"graded {TEST_COURSE_NR_ASSIGNMENTS}" in course.assignments_summary, \
         "no of assignments not reported in assigments summary"

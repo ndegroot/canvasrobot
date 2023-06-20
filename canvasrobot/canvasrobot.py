@@ -7,12 +7,13 @@ import re
 import time
 from collections import namedtuple
 from datetime import datetime
+import logging
+import binascii
 
 import attrs
 from attrs import define, asdict
 import canvasapi  # type: ignore
 import requests
-import logging
 
 # from functools import lru_cache
 try:  # type: ignore
@@ -32,7 +33,7 @@ from openpyxl.utils import get_column_letter  # type: ignore
 from openpyxl.workbook import Workbook  # type: ignore
 from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder  # type: ignore
 from socket import gaierror, timeout
-from .canvas_robot_model import (AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES,  # type: ignore
+from .canvasrobot_model import (AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES,  # type: ignore
                                  EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig,
                                  EXAMINATION_FOLDER)  # type: ignore
 from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, \
@@ -42,20 +43,10 @@ logging.getLogger("canvasapi").setLevel(logging.WARNING)
 # we don't need the info messages
 # from this library
 
-# the local module has
-logging.getLogger(__name__).setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format="%(asctime)s [%(levelname)s] %(message)s",
-#     handlers=[
-#         logging.FileHandler("canvasrobot.log"),
-#         RichHandler()
-#         # logging.StreamHandler(sys.stdout)
-#     ]
-# )
-#
 
 # noinspection PyProtectedMember
 
@@ -123,7 +114,7 @@ if MEMCACHED:
                                 serde=serde.pickle_serde)
         result = MEMCACHED.set('canvasbot', 'Running')
         running = MEMCACHED.get('canvasrobot')
-    except (gaierror, timeout):
+    except (ConnectionRefusedError, gaierror, timeout):
         MEMCACHED = False
 
 
@@ -250,10 +241,12 @@ class CanvasRobot(object):
     def __init__(self,
                  reset_api_keys: bool = False,
                  msg_queue=None,
+                 console=None, # optional Rich console
                  is_testing: bool = False,
                  db_folder: str = "",
                  fake_migrate_all: bool = False):
-        self.queue = msg_queue
+        self.queue = msg_queue # for async use in tkinter
+        self.console = console # for commandline use
 
         db_folder = db_folder or os.path.join(os.getcwd(), 'databases')
         self.db = LocalDAL(is_testing=is_testing,
@@ -263,7 +256,7 @@ class CanvasRobot(object):
         config = CanvasConfig(reset_api_keys=reset_api_keys)
         self.canvas = canvasapi.Canvas(config.url, config.api_key)
         if not self.canvas:
-            logging.error("login Canvas failed")
+            logger.error("login Canvas failed")
             exit(1)
         self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
             else None
@@ -272,7 +265,7 @@ class CanvasRobot(object):
         self.internal_id = None
         self.errors: list[str] = []
         self.actions: list[str] = []
-        logging.info("Canvasrobot started")
+        logger.info("Canvasrobot instance created")
 
     @property
     def year(self):
@@ -290,6 +283,11 @@ class CanvasRobot(object):
         if self.queue:
             self.queue.put((msg, value))
 
+    def add_message(self, msg, value):
+        if self.queue:
+            self.queue.put((msg, value))
+        if self.console:
+            self.console.print(f"{msg}:{value=}" if value else msg)
     def lookup_teachers_db(self):
         db = self.db
         teachers = db((db.course2user.role == 'T') &
@@ -343,7 +341,7 @@ class CanvasRobot(object):
         try:
             profile = Profile(**profile_dict)
         except TypeError as e:
-            logging.error(f"attribute needs to be added to Profile class: {e}")
+            logger.error(f"attribute needs to be added to Profile class: {e}")
             raise
         return profile
 
@@ -443,8 +441,8 @@ class CanvasRobot(object):
         else:
             courses = self.admin.get_courses()
             courses = filter(cur_year_active, courses)
-        # for index, c in enumerate(courses):
-        #     print(index, c.name)
+            logger.info("Create filtered list")
+            courses = list(courses)
         return courses
 
     def get_course_using_osiris_id(self, osiris_id):
@@ -531,7 +529,7 @@ class CanvasRobot(object):
             try:
                 students_dibsa += self.get_students_dibsa(edu_id.upper())
             except DibsaRetrieveError as e:
-                logging.error(e)
+                logger.error(e)
                 raise
         for student in students_dibsa:
             username = student['username']
@@ -617,17 +615,17 @@ class CanvasRobot(object):
         try:
             ofile = open(path, "rU")
         except IOError as e:
-            logging.error("{} {} not found".format(e.message, path))
+            logger.error("{} {} not found".format(e.message, path))
             raise
         else:
             reader = csv.reader(ofile, delimiter=';', quotechar='"')
             header = reader.next()
-            logging.debug(header)
+            logger.debug(header)
             # db(db.teacher.id > 0).delete()
             db(db.course2teacher.id > 0).delete()
             # refresh all course_teacher couplings
             for row in reader:
-                logging.debug(row)
+                logger.debug(row)
                 assert len(row) == 7, "Error {0} fields!".format(len(row))
                 teacher_names = row[2].replace(' (T)',
                                                '').replace(' (U)',
@@ -646,7 +644,7 @@ class CanvasRobot(object):
                     course_id = db(db.course.course_base ==
                                    row[0]).select(db.course.id)[0].id
                 else:
-                    logging.info("course added")
+                    logger.info("course added")
                 for t_name in teacher_names:
                     teacher_id = db.teacher.update_or_insert(db.teacher.name == t_name,
                                                              name=t_name)
@@ -707,10 +705,10 @@ class CanvasRobot(object):
             bbcourse_id = db(db.bbcourse.bb_id ==
                              self.internal_id).select(db.bbcourse.id).first().id
         except AttributeError:
-            logging.info(f'course_id {self.internal_id} not found in our database!')
+            logger.info(f'course_id {self.internal_id} not found in our database!')
             return -1
 
-        logging.info(f'updating users for course_id {bbcourse_id}')
+        logger.info(f'updating users for course_id {bbcourse_id}')
         # show overview enrolled users
         self.execute_command('enrolled_users', self.internal_id)
         # assumes course is selected
@@ -780,22 +778,22 @@ class CanvasRobot(object):
         :returns list of found files
         """
         courses = self.get_bbcourses(single_course=single_course)
-        logging.info("{} courses to scan".format(len(courses)))
+        logger.info("{} courses to scan".format(len(courses)))
 
         total_files: Optional[list] = []
         for count, course in enumerate(courses):
             if max_courses and count == max_courses:
-                logging.info("Stopped after {} courses".format(max_courses))
+                logger.info("Stopped after {} courses".format(max_courses))
                 break
-            logging.info("{}/{}:{}".format(count + 1, len(courses), course.name))
+            logger.info("{}/{}:{}".format(count + 1, len(courses), course.name))
             self.get_course(course.id)  # check this!
             # areas = self.get_areas()  # top level areas (menu buttons)
-            # logging.info("#{} areas#".format(len(areas)))
+            # logger.info("#{} areas#".format(len(areas)))
             # for area in areas:
             #     self.goto_area(area)  # select content area
             #     bb_files = self.get_files_from_area(level=0, area_name=area.name)
             #     # above function is recursive
-            #     logging.info("{} files#".format(len(bb_files)))
+            #     logger.info("{} files#".format(len(bb_files)))
             #     # test_file_name = bb_files[0].fname
             #     self.update_documents(bb_files)  # record data files in database
             #     total_files += bb_files
@@ -838,7 +836,7 @@ class CanvasRobot(object):
                                                    bbcourse_id=bbcourse_id,
                                                    area=c_file.area_name)
             except Exception as e:
-                logging.error(
+                logger.error(
                         "'{0}' error in update_documents() while inserting "
                         "'{1}' in table Document".format(e, c_file.name))
             else:
@@ -854,7 +852,7 @@ class CanvasRobot(object):
                        (db.bbdocument.bbcourse_id ==
                         db.bbcourse.id)).select(db.bbdocument.ALL)
         except Exception as e:
-            logging.error("*{0} error in get_list_of_ documents() "
+            logger.error("*{0} error in get_list_of_ documents() "
                           "while selecting documents*".format(e))
             return []
         else:
@@ -949,7 +947,7 @@ class CanvasRobot(object):
             records = db(cur_qry).select(fields,
                                      orderby=orderby)
         except binascii.Error:
-            logging.exception("Wrong content in image field?")
+            logger.exception("Wrong content in image field?")
         else:
             return records
 
@@ -998,8 +996,8 @@ class CanvasRobot(object):
         msg = f'Open single course {single_course}' \
             if single_course \
             else f'open course(s) for year {self.year} - {self.year + 1}'
-        self.add_to_queue(msg, None)
-        logging.info(msg)
+        self.add_message(msg, None)
+        logger.info(msg)
         num_rows = 0
         if single_course_osiris_id:
             courses = [self.get_course_using_osiris_id(single_course_osiris_id)]
@@ -1012,7 +1010,7 @@ class CanvasRobot(object):
         max_number = max_number or num_courses
 
         for idx, course in enumerate(courses):
-            self.add_to_queue("<Progress>", (course.name, idx, num_courses))
+            self.add_message("<Progress>", (course.name, idx, num_courses))
 
             # only insert/update course if current year unless single_course
             if (str(course.sis_course_id)[:4] != str(self.year)
@@ -1023,7 +1021,7 @@ class CanvasRobot(object):
                 continue
             if idx > max_number:
                 break
-            logging.debug("course: {}".format(course.name))  # course
+            logger.debug("course: {}".format(course.name))  # course
             students = course.get_users(enrollment_type="student", )
             # remove student with name=='Test Student'
             nr_students = len(list(filter(lambda s: s.name != 'Test student', list(students))))
@@ -1057,9 +1055,9 @@ class CanvasRobot(object):
             except AttributeError as e:
                 msg = (f"skipped teacher of {course.name} "
                        f"[{course.id}] due to {e}")
-                logging.warning(msg)
+                logger.warning(msg)
                 continue
-            logging.info("instructors: {0}".format(teacher_logins))  # instructors
+            logger.info("instructors: {0}".format(teacher_logins))  # instructors
 
             inserted_id = None
             format_str = "%Y-%m-%dT%H:%M:%SZ"
@@ -1094,8 +1092,8 @@ class CanvasRobot(object):
                 db.commit()  # really needed here??
             except Exception as e:
                 err = f"{e} error inserting {course.name}"
-                self.add_to_queue("<InsertError>", err)
-                logging.exception(err)
+                self.add_message("<InsertError>", err)
+                logger.exception(err)
                 raise
             if course_id:  # a new course has been inserted in the db
                 db(db.course.id == inserted_id).update(status=2)
@@ -1120,7 +1118,7 @@ class CanvasRobot(object):
             db.commit()
             num_rows += 1
 
-        self.add_to_queue("<Done>",
+        self.add_message("<Done>",
                           (f"Update db from Canvas "
                            f"{single_course or max_number or 'All courses'}"))
         return num_rows
@@ -1256,7 +1254,7 @@ class CanvasRobot(object):
         :param url: remote url to fetch file from
         """
         filename = 'static/' + fname.strip()
-        logging.info("creating file %s for %s" % (filename, url))
+        logger.info("creating file %s for %s" % (filename, url))
         # convert to fname/value pairs
         cookies = {}
         for cookie in self.cookies:
@@ -1269,7 +1267,7 @@ class CanvasRobot(object):
                         break
                     outfile.write(block)
             else:
-                logging.info("html error %s" % r.status_code)
+                logger.info("html error %s" % r.status_code)
         return r.status_code
 
     def transfer_file_to_server(self, url=None, fname=None):
@@ -1279,18 +1277,18 @@ class CanvasRobot(object):
         """
         db = self.db
         filename = fname.strip()
-        logging.debug("creating transfer buffer %s for %s" % (filename, url))
+        logger.debug("creating transfer buffer %s for %s" % (filename, url))
         # convert to fname/value pairs
         cookies = {}
         for cookie in self.cookies:
             cookies[str(cookie['fname'])] = cookie['value']
         #
-        logging.info("cookies %s for %s" % (cookies, url))
+        logger.info("cookies %s for %s" % (cookies, url))
         with io.BytesIO() as outfile:
             try:
                 r = requests.get(url, cookies=cookies, stream=True)
             except requests.exceptions.RequestException as e:
-                logging.error("couldn't get {} from file {} due to {}".format(filename,
+                logger.error("couldn't get {} from file {} due to {}".format(filename,
                                                                               url,
                                                                               e.message))
                 return None
@@ -1298,22 +1296,23 @@ class CanvasRobot(object):
             if r.status_code == 200:
                 self.receive_file(db, filename, outfile, r, url)
             else:
-                logging.info("html response {} url is now {}".format(r.status_code, r.url))
+                logger.info("html response {} url is now {}".format(r.status_code,
+                                                                    r.url))
                 # try again with redirected url (we assume redirection)
                 r = requests.get(r.url, cookies=cookies, stream=True)
                 if r.status_code == 200:
                     self.receive_file(db, filename, outfile, r, url)
                 else:
-                    logging.error('Failed {0}'.format(r))
+                    logger.error('Failed {0}'.format(r))
 
         return r.status_code
 
     @staticmethod
     def receive_file(db, filename, outfile, r, url):
-        logging.debug('Start receiving file in buffer')
+        logger.debug('Start receiving file in buffer')
         for block in r.iter_content(1024):
             if not block:
-                logging.debug('.')
+                logger.debug('.')
                 break
             outfile.write(block)
         outfile.seek(0)  # rewind
@@ -1326,15 +1325,15 @@ class CanvasRobot(object):
             msg = "unable to store {} with content-type {} {}".format(filename,
                                                                       content_type,
                                                                       e.message)
-            logging.error(msg)
+            logger.error(msg)
         except IOError as e:
             msg = "unable to store {} based on {} and {} {}".format(full_filename,
                                                                     filename,
                                                                     content_type,
                                                                     e.message)
-            logging.error(msg)
+            logger.error(msg)
         else:
-            logging.info("{} should be in uploads folder...".format(full_filename))
+            logger.info("{} should be in uploads folder...".format(full_filename))
             db(db.bbdocument.url == url).update(bbfile=thisfile)
             db.commit()
 
@@ -1441,7 +1440,7 @@ class CanvasRobot(object):
         """
         course: Course = self.get_course(course_id)
         quiz = course.create_quiz(dict(title=title, quiz_type=quiz_type))
-        logging.debug(f"{course.name} now contains {quiz}")
+        logger.debug(f"{course.name} now contains {quiz}")
         return quiz.id
 
     def create_question(self,
@@ -1457,7 +1456,7 @@ class CanvasRobot(object):
         course = self.get_course(course_id)
         quiz = course.get_quiz(quiz_id)
         quiz_question = quiz.create_question(question=asdict(question_dto))
-        logging.debug(f"{quiz} now contains {quiz_question}")
+        logger.debug(f"{quiz} now contains {quiz_question}")
         return quiz_question.id
         # return f"{quiz} now contains {quiz_question}", quiz_question.id
 
@@ -1520,22 +1519,28 @@ class CanvasRobot(object):
                 return tab
 
     def create_folder_in_course_files(self, course_id: int, foldername: str):
+        """
+        :param foldername:
+        :param course_id:
+        in course with 'course_id' create a folder 'foldername'"""
         course = self.get_course(course_id)
 
         foldernames = [f.full_name for f in course.get_folders()]
         if f"course files/{foldername}" in foldernames:
-            logging.info(f"No action needed: Folder '(course) files/{foldername}' "
-                         f"already in ({course_id})")
+            logger.info(f"No action needed: Folder '(course) files/{foldername}' "
+                         f"already in ({course_id=})")
             return -1
         folder_id = course.create_folder(foldername,
                                          parent_folder_path='/',
                                          locked=True)
-        logging.info(f"Folder '(course) files/{foldername}' should be created now")
+        logger.info(f"Folder '(course) files/{foldername}' should be created now in ({course_id=})")
         return folder_id
 
     def create_folder_in_all_courses(self, foldername):
+
         for course in track(self.get_all_active_tst_courses(from_db=False),
-                            description="All current courses..."):
+                            description="All current courses...",
+                            console=self.console):
             self.create_folder_in_course_files(course.id, foldername)
 
     def unpublish_subfolder_in_all_courses(self,
@@ -1545,10 +1550,11 @@ class CanvasRobot(object):
         for course in track(self.get_all_active_tst_courses(from_db=False),
                             description=(f"Checking all current"
                                          f" courses for folder '{foldername}'..." if check_only
-                            else f"Unpublish all published folder {foldername}...")):
+                            else f"Unpublish all published folder {foldername}..."),
+                            console=self.console):
             if course.name.endswith("_conclude"):
                 continue
-            # logging.info(course.name)
+            # logger.info(course.name)
             self.unpublish_folderitems_in_course(course.id,
                                                  foldername,
                                                  files_too,
@@ -1576,18 +1582,18 @@ class CanvasRobot(object):
                 if not folder.locked:
                     folder.update(locked=True)
                     folder_changes += 1
-                    logging.info(f"Corrected: Folder '{folder.full_name}' "
+                    logger.info(f"Corrected: Folder '{folder.full_name}' "
                                  f"is now unpublished!")
                 unpublish_items(folder)
             for file in file_or_folder.get_files():
                 if not file.locked:
                     if not check_only:
                         file_update(file, locked=True)
-                        logging.info(f"Corrected: File '{file.display_name}' in {foldername} "
+                        logger.info(f"Corrected: File '{file.display_name}' in {foldername} "
                                      f"is now unpublished")
                         file_changes += 1
                     else:
-                        logging.warning(f"File '{file.display_name}' in {foldername} is published!")
+                        logger.warning(f"File '{file.display_name}' in {foldername} is published!")
 
         # files_folder = 'course files'
         course_ids_missing_folder = []
@@ -1599,39 +1605,39 @@ class CanvasRobot(object):
                             self.get_course_tab_by_label(course_id, "Bestanden")
                 try:
                     if files_tab.visibility == "public":
-                        logging.warning(f"Files folder of {course.name}"
+                        logger.warning(f"Files folder of {course.name}"
                                         f" ({course.id}) is visible")
                         # files_tab.visibility = "admins" # ! no change  without teachers approval!
                 except AttributeError:
-                    logging.warning(f"Files tab visibility of {course.name} {course_id} missing")
+                    logger.warning(f"Files tab visibility of {course.name} {course_id} missing")
 
                 # folder_id = folder.id
                 if not folder.locked:
                     if not check_only:
                         folder.update(locked=True)
                         folder_changes += 1
-                        logging.info(
+                        logger.info(
                                 f"Folder '{foldername}' is now unpublished"
                                 f" in course {course.name}")
                     else:
-                        logging.warning(f"Folder '{foldername}' is published "
+                        logger.warning(f"Folder '{foldername}' is published "
                                         f"in course {course.name}({course.id})!")
                 else:
-                    logging.debug(
+                    logger.debug(
                             f"Folder '{foldername}' was already "
                             f"unpublished/locked in course {course.name}")
                 if files_too:
                     unpublish_items(folder)
                     # for f in folder.get_files():
                     #    if not f.locked:
-                    #        logging.warning(f"{f.filename} is published!")
+                    #        logger.warning(f"{f.filename} is published!")
                 break
         else:
-            logging.info(f"Folder '{foldername}' not found in {course.name}")
+            logger.info(f"Folder '{foldername}' not found in {course.name}")
             course_ids_missing_folder.append(course_id)
 
         for course_id in course_ids_missing_folder:
-            logging.info(f"Folder '{foldername}' not found in {course_id}")
+            logger.info(f"Folder '{foldername}' not found in {course_id}")
         return folder_changes, file_changes
 
 
