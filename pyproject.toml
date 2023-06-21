@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "canvasrobot"
-version = "0.7.1"
+version = "0.7.3"
 description = "Library which uses Canvasapi https://canvasapi.readthedocs.io/en/stable/getting-started.html to provide a CanvasRobot class."
 authors = ["Nico de Groot <ndegroot0@gmail.com>",]
 readme = "README.md"
@@ -15,6 +15,7 @@ requests = "^2.31.0"
 pyaml = "^23.5.9"
 rich = "^13.4.2"
 canvasapi = "^3.2.0"
+attrs = "*"
 
 
 [tool.poetry.dev-dependencies]

@@ -7,16 +7,16 @@ import logging.config
 
 from attrs import define
 import keyring
-# for UI use rich of tkinter
+# for UI use rich or tkinter
 from rich.prompt import Prompt
 from tkinter import simpledialog
 
 
 @define
 class CanvasConfig:
-    """" save the urls and API_key in a save space using keyring"""
+    """" save the urls and API_key in a safe space using keyring (works on MacOS and Windows)"""
     namespace = "canvasrobot"
-    app_window: object = None
+    gui_root: object = None
     reset_api_keys: bool = False
     url: str = ""
     api_key: str = ""
@@ -51,8 +51,8 @@ class CanvasConfig:
             # noinspection PyTypeChecker
             value = simpledialog.askstring("Input",
                                            msg,
-                                           parent=self.app_window) \
-                if self.app_window else Prompt.ask(msg)
+                                           parent=self.gui_root) \
+                if self.gui_root else Prompt.ask(msg)
             keyring.set_password(self.namespace, entry, value)
             value = keyring.get_password(self.namespace, entry)
         return value

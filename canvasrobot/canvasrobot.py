@@ -15,6 +15,7 @@ from attrs import define, asdict
 import canvasapi  # type: ignore
 import requests
 
+
 # from functools import lru_cache
 try:  # type: ignore
     from pymemcache import serde  # type: ignore
@@ -34,8 +35,8 @@ from openpyxl.workbook import Workbook  # type: ignore
 from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder  # type: ignore
 from socket import gaierror, timeout
 from .canvasrobot_model import (AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES,  # type: ignore
-                                 EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig,
-                                 EXAMINATION_FOLDER)  # type: ignore
+                                EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig,
+                                EXAMINATION_FOLDER)  # type: ignore
 from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, \
     Stats  # type: ignore
 
@@ -238,25 +239,32 @@ class CanvasRobot(object):
     def __init__(self,
                  reset_api_keys: bool = False,
                  msg_queue=None,
-                 console=None, # optional Rich console
+                 console=None,  # optional Rich console
+                 gui_root=None,  # optional Tkinter root
                  is_testing: bool = False,
                  db_folder: str = "",
                  fake_migrate_all: bool = False):
-        self.queue = msg_queue # for async use in tkinter
-        self.console = console # for commandline use
+        self.browser = None
+        self.queue = msg_queue  # for async use in tkinter
+        self.console = console  # for commandline use
+        self.gui_root = gui_root  # tkinter root
 
         db_folder = db_folder or os.path.join(os.getcwd(), 'databases')
         self.db = LocalDAL(is_testing=is_testing,
                            fake_migrate_all=fake_migrate_all,
                            folder=db_folder)
 
-        config = CanvasConfig(reset_api_keys=reset_api_keys)
+        config = CanvasConfig(reset_api_keys=reset_api_keys, gui_root=gui_root)
         self.canvas = canvasapi.Canvas(config.url, config.api_key)
         if not self.canvas:
             logger.error("login Canvas failed")
             exit(1)
-        self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
-            else None
+        try:
+            self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
+                else None
+        except canvasapi.exceptions.Forbidden:
+            self.admin = None
+
         self.teacher_ids = self.lookup_teachers_db()
 
         self.internal_id = None
@@ -660,10 +668,11 @@ class CanvasRobot(object):
 
     def execute_command(self, command, params=None):
         """
+        not in use ?
         :param command: command to execute
         :param params: parameters to tune command
         """
-        self.open()  # open canvas object
+        # self.open()  # open canvas object
         try:
             url = self.base_url + (self.commands[command].format(params)
                                    if params else self.commands[command])
@@ -722,7 +731,6 @@ class CanvasRobot(object):
 
         db = self.db  # cosmetic reasons
         qry = db.course.ac_year == self.year
-        # couluns = ()
         courses = db(qry).select(db.course.course_id,
                                  db.course.nr_modules,
                                  db.course.nr_module_items,
@@ -1500,9 +1508,9 @@ class CanvasRobot(object):
                                                    quiz_id=quiz_id,
                                                    question_dto=question_dto)
                 stats.question_ids.append(question_id)
-            if gui_root:
-                gui_queue.put(index / total_questions)
-                gui_root.event_generate('<<CreateQuizzes:Progress>>')
+                if gui_root:
+                    gui_queue.put(index / total_questions)
+                    gui_root.event_generate('<<CreateQuizzes:Progress>>')
 
         if gui_root:
             gui_root.event_generate('<<CreateQuizzes:Done>>')
