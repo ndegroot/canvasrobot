@@ -4,7 +4,6 @@ import json
 import mimetypes
 import os
 import re
-import time
 from collections import namedtuple
 from datetime import datetime
 import logging
@@ -14,7 +13,6 @@ import attrs
 from attrs import define, asdict
 import canvasapi  # type: ignore
 import requests
-
 
 # from functools import lru_cache
 try:  # type: ignore
@@ -57,7 +55,7 @@ def file_update(file, **kwargs):
         :rtype: :class:`canvasapi.file.File`
         """
     response = file._requester.request(
-            "PUT", "files/{}".format(file.id), _kwargs=combine_kwargs(**kwargs)
+        "PUT", "files/{}".format(file.id), _kwargs=combine_kwargs(**kwargs)
     )
 
     if "name" in response.json():
@@ -207,17 +205,17 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
         #    nr_collaborations = len(list_of_collaborations)
         # except TypeError:
         #    nr_collaborations = None
-        md = CourseMetadata(nr_modules=nr_modules,
-                            nr_module_items=nr_module_items,
-                            nr_pages=nr_pages,
-                            nr_assignments=nr_assignments,
-                            nr_quizzes=nr_quizzes,
-                            nr_files=nr_files,
-                            assignments_summary=assignments_summary,
-                            examinations_summary=examinations_summary,
-                            examination_records=examinations
-                            )
-        return md
+        cmd = CourseMetadata(nr_modules=nr_modules,
+                             nr_module_items=nr_module_items,
+                             nr_pages=nr_pages,
+                             nr_assignments=nr_assignments,
+                             nr_quizzes=nr_quizzes,
+                             nr_files=nr_files,
+                             assignments_summary=assignments_summary,
+                             examinations_summary=examinations_summary,
+                             examination_records=examinations
+                             )
+        return cmd
 
     if MEMCACHED:
         memc_key = f"{course_id}{hash(ignore_assignment_names)}"
@@ -233,6 +231,7 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
 class CanvasRobot(object):
     """" uses caching since """
     db: Any
+    canvas_login: bool = False
     TOT_WEIGHT: int = 100
     _year: int = AC_YEAR  # the current academic year
 
@@ -244,6 +243,7 @@ class CanvasRobot(object):
                  is_testing: bool = False,
                  db_folder: str = "",
                  fake_migrate_all: bool = False):
+        self.cookies: list = []
         self.browser = None
         self.queue = msg_queue  # for async use in tkinter
         self.console = console  # for commandline use
@@ -255,10 +255,15 @@ class CanvasRobot(object):
                            folder=db_folder)
 
         config = CanvasConfig(reset_api_keys=reset_api_keys, gui_root=gui_root)
-        self.canvas = canvasapi.Canvas(config.url, config.api_key)
-        if not self.canvas:
-            logger.error("login Canvas failed")
-            exit(1)
+        try:
+            self.canvas = canvasapi.Canvas(config.url, config.api_key)
+        except canvasapi.exceptions.Forbidden:
+            logger.error("login Canvas failed (Forbidden) Wrong API key?")
+            self.canvas_login = False
+        else:
+            if not self.canvas:
+                logger.error("login Canvas failed")
+                self.canvas_login = False
         try:
             self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
                 else None
@@ -282,7 +287,7 @@ class CanvasRobot(object):
 
     @property
     def full_ac_year(self):
-        return f"{self._year}-{self._year+1}"
+        return f"{self._year}-{self._year + 1}"
 
     def add_to_queue(self, msg, value):
         if self.queue:
@@ -293,6 +298,7 @@ class CanvasRobot(object):
             self.queue.put((msg, value))
         if self.console:
             self.console.print(f"{msg}:{value=}" if value else msg)
+
     def lookup_teachers_db(self):
         db = self.db
         teachers = db((db.course2user.role == 'T') &
@@ -397,9 +403,9 @@ class CanvasRobot(object):
         the others are reported in assignments_summary
         :returns md: CourseMetadata"""
         ignore_assignment_names = ignore_assignment_names or []
-        result = course_metadata_memcached(course_id, self.canvas,
-                                           frozenset(ignore_assignment_names))
-        return result
+        md_result = course_metadata_memcached(course_id, self.canvas,
+                                              frozenset(ignore_assignment_names))
+        return md_result
 
     def enroll_in_course(self,
                          search: str,
@@ -441,7 +447,7 @@ class CanvasRobot(object):
         if from_db:
             db = self.db
             courses = db(
-                    (db.course.ac_year == self.year)).select(db.course.ALL)
+                (db.course.ac_year == self.year)).select(db.course.ALL)
             # map(set_id_to_course_id, courses)
         else:
             courses = self.admin.get_courses()
@@ -491,7 +497,7 @@ class CanvasRobot(object):
                 return False  # give up
             except canvasapi.exceptions.Unauthorized:
                 self.errors.append(f"User {search_name} "
-                                   f"not (alllowed to be) found by email in Canvas")
+                                   f"not (allowed to be) found by email in Canvas")
                 return False  # give up
         return user
 
@@ -506,7 +512,7 @@ class CanvasRobot(object):
             raise DibsaRetrieveError(f"Unable to connect to source "
                                      f"Dibsa @ {url} maybe first start web2py locally")
         try:
-            result = r.json()
+            json_result = r.json()
         except json.decoder.JSONDecodeError:
             raise DibsaRetrieveError(f"unable to decode student data "
                                      f"of {c_name} from Dibsa @ {url}")
@@ -514,15 +520,15 @@ class CanvasRobot(object):
             raise DibsaRetrieveError(f"unable to decode student data "
                                      f"of {c_name} from Dibsa @ {url} due to {e}")
 
-        return result
+        return json_result
 
     def get_students_for_community(self, c_id):
 
-        community_edu_ids = {'banl'    : ['banl', 'pm-ma', 'pm-ulo'],  # nl
-                             'bauk'    : ['bauk', 'pm-macs'],  # uk
-                             'ma'      : ['ma'],
-                             'ulo'     : ['ulo'],
-                             'macs'    : ['macs'],
+        community_edu_ids = {'banl': ['banl', 'pm-ma', 'pm-ulo'],  # nl
+                             'bauk': ['bauk', 'pm-macs'],  # uk
+                             'ma': ['ma'],
+                             'ulo': ['ulo'],
+                             'macs': ['macs'],
                              'acskills': [edu.lower() for edu in EDUCATIONS]
                              }
         # edu_ids = [edu.lower() for edu in EDUCATIONS]
@@ -609,7 +615,7 @@ class CanvasRobot(object):
     # noinspection PyCallingNonCallable
     def import_courses(self, filename):
         """from csv file updates table Course and Teacher
-        :param filename: fname csv file
+        :param filename: filename csv file
         """
 
         import csv
@@ -624,7 +630,7 @@ class CanvasRobot(object):
             raise
         else:
             reader = csv.reader(ofile, delimiter=';', quotechar='"')
-            header = reader.next()
+            header = next(reader)
             logger.debug(header)
             # db(db.teacher.id > 0).delete()
             db(db.course2teacher.id > 0).delete()
@@ -666,67 +672,68 @@ class CanvasRobot(object):
     # ----------------------------------------
     # Other interactions
 
-    def execute_command(self, command, params=None):
-        """
-        not in use ?
-        :param command: command to execute
-        :param params: parameters to tune command
-        """
-        # self.open()  # open canvas object
-        try:
-            url = self.base_url + (self.commands[command].format(params)
-                                   if params else self.commands[command])
-        except Exception:
-            raise NotImplementedError(f"error in command {command} or params {params}")
-        else:
-            try:
-                self.browser.get(url)
-            except Exception as e:
-                raise ValueError("self.browser.get uses url {} e:{}".format(url, e))
-            return self.browser
-
-    # the commands ------------------------------------------------------------
-
-    def ud_course_users(self):
-        total_count = 0
-        for bb_id in self.get_course_bb_ids():
-            count, count_students = self.ud_students(bb_id=bb_id)
-            total_count += count
-
-        return total_count
-
-    def ud_students(self, bb_id=None):
-        """ add enrolled users for given or currently selected course to db
-        :param bb_id: if not given use self.internal_id
-        """
-
-        db = self.db
-        if bb_id:
-            # set self,internal_id using lookup
-            self.internal_id = bb_id
-        else:
-            assert self.internal_id
-        # we need the primary key
-        try:
-            bbcourse_id = db(db.bbcourse.bb_id ==
-                             self.internal_id).select(db.bbcourse.id).first().id
-        except AttributeError:
-            logger.info(f'course_id {self.internal_id} not found in our database!')
-            return -1
-
-        logger.info(f'updating users for course_id {bbcourse_id}')
-        # show overview enrolled users
-        self.execute_command('enrolled_users', self.internal_id)
-        # assumes course is selected
-        count = 0
-        count_students = 0
-        # connect user to this course in db
-        db.commit()
-
-        return count, count_students
+    # # Old Blackboard interactions
+    # def execute_command(self, command, params=None):
+    #     """
+    #     not in use ?
+    #     :param command: command to execute
+    #     :param params: parameters to tune command
+    #     """
+    #     # self.open()  # open canvas object
+    #     try:
+    #         url = self.base_url + (self.commands[command].format(params)
+    #                                if params else self.commands[command])
+    #     except Exception:
+    #         raise NotImplementedError(f"error in command {command} or params {params}")
+    #     else:
+    #         try:
+    #             self.browser.get(url)
+    #         except Exception as e:
+    #             raise ValueError("self.browser.get uses url {} e:{}".format(url, e))
+    #         return self.browser
+    #
+    # # the commands ------------------------------------------------------------
+    #
+    # def ud_course_users(self):
+    #     total_count = 0
+    #     for bb_id in self.get_course_bb_ids():
+    #         count, count_students = self.ud_students(bb_id=bb_id)
+    #         total_count += count
+    #
+    #     return total_count
+    #
+    # def ud_students(self, bb_id=None):
+    #     """ add enrolled users for given or currently selected course to db
+    #     :param bb_id: if not given use self.internal_id
+    #     """
+    #
+    #     db = self.db
+    #     if bb_id:
+    #         # set self,internal_id using lookup
+    #         self.internal_id = bb_id
+    #     else:
+    #         assert self.internal_id
+    #     # we need the primary key
+    #     try:
+    #         bbcourse_id = db(db.bbcourse.bb_id ==
+    #                          self.internal_id).select(db.bbcourse.id).first().id
+    #     except AttributeError:
+    #         logger.info(f'course_id {self.internal_id} not found in our database!')
+    #         return -1
+    #
+    #     logger.info(f'updating users for course_id {bbcourse_id}')
+    #     # show overview enrolled users
+    #     self.execute_command('enrolled_users', self.internal_id)
+    #     # assumes course is selected
+    #     count = 0
+    #     count_students = 0
+    #     # connect user to this course in db
+    #     db.commit()
+    #
+    #     return count, count_students
 
     def get_courses_data(self):
-        """ for all courses: get a matrix and labels coursename and other fields from db
+        """ for all courses: get a matrix and labels course name and other fields from db
         :return: features-matrix, labels """
 
         db = self.db  # cosmetic reasons
@@ -745,20 +752,20 @@ class CanvasRobot(object):
         columns = ("nrModules", "nrModuleItems", ",nrPages", "nr_assignments")
         return features, labels, columns
 
-    def get_bbcourses(self, single_course: str = ""):
-        """ for all courses: get coursename and other fields from db
-        :param single_course: used for testing
-        :return: rows/list of dicts """
-
-        db = self.db  # cosmetic reasons
-        suffix = '-{}-'.format(self.year)
-        qry = db.bbcourse.course_suffix.contains(suffix)
-        if single_course:
-            qry &= db.bbcourse.course_base == single_course
-        rows = db(qry).select(db.bbcourse.bb_id,
-                              db.bbcourse.name,
-                              orderby=db.bbcourse.name)
-        return rows
+    # def get_bbcourses(self, single_course: str = ""):
+    #     """ for all courses: get coursename and other fields from db
+    #     :param single_course: used for testing
+    #     :return: rows/list of dicts """
+    #
+    #     db = self.db  # cosmetic reasons
+    #     suffix = '-{}-'.format(self.year)
+    #     qry = db.bbcourse.course_suffix.contains(suffix)
+    #     if single_course:
+    #         qry &= db.bbcourse.course_base == single_course
+    #     rows = db(qry).select(db.bbcourse.bb_id,
+    #                           db.bbcourse.name,
+    #                           orderby=db.bbcourse.name)
+    #     return rows
 
     def report_studentcounts(self):
         """ for all courses: get coursename and student count
@@ -776,34 +783,34 @@ class CanvasRobot(object):
             row.count = row[count]
         return rows
 
-    def update_all_file_urls(self, max_courses: int = 0, single_course=None) -> str:
-        """ for all courses harvest the attachments/files urls from Bb
-        :param single_course: for testing
-        :param max_courses:
-        :returns list of found files
-        """
-        courses = self.get_bbcourses(single_course=single_course)
-        logger.info("{} courses to scan".format(len(courses)))
-
-        total_files: Optional[list] = []
-        for count, course in enumerate(courses):
-            if max_courses and count == max_courses:
-                logger.info("Stopped after {} courses".format(max_courses))
-                break
-            logger.info("{}/{}:{}".format(count + 1, len(courses), course.name))
-            self.get_course(course.id)  # check this!
-            # areas = self.get_areas()  # top level areas (menu buttons)
-            # logger.info("#{} areas#".format(len(areas)))
-            # for area in areas:
-            #     self.goto_area(area)  # select content area
-            #     bb_files = self.get_files_from_area(level=0, area_name=area.name)
-            #     # above function is recursive
-            #     logger.info("{} files#".format(len(bb_files)))
-            #     # test_file_name = bb_files[0].fname
-            #     self.update_documents(bb_files)  # record data files in database
-            #     total_files += bb_files
-        return "{} courses scanned {} files found".format(len(courses),
-                                                          len(total_files) if total_files else 0)
+    # def update_all_file_urls(self, max_courses: int = 0, single_course=None) -> str:
+    #     """ for all courses harvest the attachments/files urls from Bb
+    #     :param single_course: for testing
+    #     :param max_courses:
+    #     :returns list of found files
+    #     """
+    #     courses = self.get_bbcourses(single_course=single_course)
+    #     logger.info("{} courses to scan".format(len(courses)))
+    #
+    #     total_files: Optional[list] = []
+    #     for count, course in enumerate(courses):
+    #         if max_courses and count == max_courses:
+    #             logger.info("Stopped after {} courses".format(max_courses))
+    #             break
+    #         logger.info("{}/{}:{}".format(count + 1, len(courses), course.name))
+    #         self.get_course(course.id)  # check this!
+    #         # areas = self.get_areas()  # top level areas (menu buttons)
+    #         # logger.info("#{} areas#".format(len(areas)))
+    #         # for area in areas:
+    #         #     self.goto_area(area)  # select content area
+    #         #     bb_files = self.get_files_from_area(level=0, area_name=area.name)
+    #         #     # above function is recursive
+    #         #     logger.info("{} files#".format(len(bb_files)))
+    #         #     # test_file_name = bb_files[0].fname
+    #         #     self.update_documents(bb_files)  # record data files in database
+    #         #     total_files += bb_files
+    #     return "{} courses scanned {} files found".format(len(courses),
+    #                                                       len(total_files) if total_files else 0)
 
     # the delegates ---
     # noinspection PyRedeclaration
@@ -813,9 +820,9 @@ class CanvasRobot(object):
     def _check_bb(self, suffix=NEXT_YEAR):
         self.db.check_bb(suffix)
 
-    def show_user(self, user_id):
-        self.execute_command('showuser', user_id)
-        time.sleep(120)
+    # def show_user(self, user_id):
+    #     self.execute_command('showuser', user_id)
+    #     time.sleep(120)
 
     def update_documents(self, files):
         """ insert file object properties (fname, url) in table bbdocument
@@ -842,8 +849,8 @@ class CanvasRobot(object):
                                                    area=c_file.area_name)
             except Exception as e:
                 logger.error(
-                        "'{0}' error in update_documents() while inserting "
-                        "'{1}' in table Document".format(e, c_file.name))
+                    "'{0}' error in update_documents() while inserting "
+                    "'{1}' in table Document".format(e, c_file.name))
             else:
                 db.commit()
 
@@ -858,7 +865,7 @@ class CanvasRobot(object):
                         db.bbcourse.id)).select(db.bbdocument.ALL)
         except Exception as e:
             logger.error("*{0} error in get_list_of_ documents() "
-                          "while selecting documents*".format(e))
+                         "while selecting documents*".format(e))
             return []
         else:
             return items
@@ -950,7 +957,7 @@ class CanvasRobot(object):
         orderby = orderby or db.course.course_code
         try:
             records = db(cur_qry).select(fields,
-                                     orderby=orderby)
+                                         orderby=orderby)
         except binascii.Error:
             logger.exception("Wrong content in image field?")
         else:
@@ -964,10 +971,10 @@ class CanvasRobot(object):
 
     def delete_course_from_database(self, course_id):
         db = self.db
-        result = db(db.course.course_id == course_id).delete()
-        result2 = db(db.examination.course == course_id).delete()
+        course_deleted = db(db.course.course_id == course_id).delete()
+        examination_deleted = db(db.examination.course == course_id).delete()
         db.commit()
-        return result and result2
+        return course_deleted and examination_deleted
 
     def update_record_db(self, qry, field, value):
 
@@ -1124,13 +1131,13 @@ class CanvasRobot(object):
             num_rows += 1
 
         self.add_message("<Done>",
-                          (f"Update db from Canvas "
-                           f"{single_course or max_number or 'All courses'}"))
+                         (f"Update db from Canvas "
+                          f"{single_course or max_number or 'All courses'}"))
         return num_rows
 
     def is_user_valid(self, userinfo):
         """"":param userinfo (dict or named tuple or Storage with attributes id, login_id)
-             :returns True for invalid user, detail"""
+             :returns True for valid user, detail"""
         if type(userinfo) == dict:
             # import collections
             # User = collections.namedtuple('User', 'id')
@@ -1187,21 +1194,21 @@ class CanvasRobot(object):
         def filter_student(enrollment):
             """"filter the real students"""
             try:
-                result = (enrollment.user['name'].lower() != 'test student' and
-                          enrollment.role == 'StudentEnrollment')
+                is_real_student = (enrollment.user['name'].lower() != 'test student' and
+                                   enrollment.role == 'StudentEnrollment')
             except Exception as e:
                 self.errors.append(f"{enrollment.user['name']} not retrieved {e}")
                 return False
-            return result
+            return is_real_student
 
         # enrollments = [enrollment for enrollment in enrollments]
         enrollments = filter(filter_student, enrollments)
         return enrollments
 
     def cleanup_community(self, c_id, report_only):
-        result = self.check_c_cid(c_id)
-        if result != 'ok':
-            return result
+        # result = self.check_c_cid(c_id)
+        # if result != 'ok':
+        #    return result
 
         course = self.get_course(COMMUNITIES[c_id])
         enrollments = course.get_enrollments()
@@ -1212,11 +1219,11 @@ class CanvasRobot(object):
                 continue
             if enrollment.role == 'StudentEnrollment':
                 try:
-                    invalid, reason = self.user_invalid(enrollment.user)
+                    valid, reason = self.is_user_valid(enrollment.user)
                 except Exception as e:
                     errors.append(f"{enrollment.user['fname']} not retrieved {e}")
                     continue
-                if invalid:
+                if not valid:
 
                     if not report_only:
                         try:
@@ -1245,8 +1252,8 @@ class CanvasRobot(object):
         assert ", " in user.sortable_name, "sortable_name should contain comma"
         source = user.sortable_name
         pat = re.compile(
-                r'(?P<last_name>[\w \-]+), (?P<first_name>\w+)\s?((\((?P<first_name_par>\w+)\))|'
-                r'(\((?P<init>[\w.]+.)\)))?(\s*(?P<prefix>\w+))?')
+            r'(?P<last_name>[\w \-]+), (?P<first_name>\w+)\s?((\((?P<first_name_par>\w+)\))|'
+            r'(\((?P<init>[\w.]+.)\)))?(\s*(?P<prefix>\w+))?')
         d = re.match(pat, source)
         if not d:
             print("!!!Failed parsing!!!")
@@ -1294,8 +1301,8 @@ class CanvasRobot(object):
                 r = requests.get(url, cookies=cookies, stream=True)
             except requests.exceptions.RequestException as e:
                 logger.error("couldn't get {} from file {} due to {}".format(filename,
-                                                                              url,
-                                                                              e.message))
+                                                                             url,
+                                                                             e))
                 return None
 
             if r.status_code == 200:
@@ -1329,13 +1336,13 @@ class CanvasRobot(object):
         except TypeError as e:
             msg = "unable to store {} with content-type {} {}".format(filename,
                                                                       content_type,
-                                                                      e.message)
+                                                                      e)
             logger.error(msg)
         except IOError as e:
             msg = "unable to store {} based on {} and {} {}".format(full_filename,
                                                                     filename,
                                                                     content_type,
-                                                                    e.message)
+                                                                    e)
             logger.error(msg)
         else:
             logger.info("{} should be in uploads folder...".format(full_filename))
@@ -1369,25 +1376,25 @@ class CanvasRobot(object):
                             LabelType(label='score', field_type='percentage'),
                             LabelType(label='grade', field_type='grade')]
         styles = {
-                # list below is not complete
-                # see https://www.web2pyref.com/reference/field-type-database-field-types
-                'datetime'  : NamedStyle(name='date', number_format='yyyy-mm-dd'),
-                'id'        : NamedStyle(name='int', number_format='#,##0'),
-                'integer'   : NamedStyle(name='int', number_format='#,##0'),
-                'price'     : NamedStyle(name='money', font=Font(italic=True),
-                                         fill=PatternFill(fill_type='solid', fgColor='404040'),
-                                         number_format=u'[$\u20ac-1] #,##0.00 '),  # unicode for €
-                'double'    : NamedStyle(name='double', number_format='#0.000000'),
-                'grade'     : NamedStyle(name='grade', number_format='#0.00'),
-                'percentage': NamedStyle(name='score', number_format='#0.00'),
-                'string'    : NamedStyle(name='std',
-                                         alignment=Alignment(horizontal='left',
-                                                             vertical='bottom',
-                                                             text_rotation=0,
-                                                             wrap_text=False,
-                                                             shrink_to_fit=False,
-                                                             indent=0)),
-                'text'      : None
+            # list below is not complete
+            # see https://www.web2pyref.com/reference/field-type-database-field-types
+            'datetime': NamedStyle(name='date', number_format='yyyy-mm-dd'),
+            'id': NamedStyle(name='int', number_format='#,##0'),
+            'integer': NamedStyle(name='int', number_format='#,##0'),
+            'price': NamedStyle(name='money', font=Font(italic=True),
+                                fill=PatternFill(fill_type='solid', fgColor='404040'),
+                                number_format=u'[$\u20ac-1] #,##0.00 '),  # unicode for €
+            'double': NamedStyle(name='double', number_format='#0.000000'),
+            'grade': NamedStyle(name='grade', number_format='#0.00'),
+            'percentage': NamedStyle(name='score', number_format='#0.00'),
+            'string': NamedStyle(name='std',
+                                 alignment=Alignment(horizontal='left',
+                                                     vertical='bottom',
+                                                     text_rotation=0,
+                                                     wrap_text=False,
+                                                     shrink_to_fit=False,
+                                                     indent=0)),
+            'text': None
         }
 
         dest_filename = f'TST {course}.xlsx'
@@ -1533,7 +1540,7 @@ class CanvasRobot(object):
         foldernames = [f.full_name for f in course.get_folders()]
         if f"course files/{foldername}" in foldernames:
             logger.info(f"No action needed: Folder '(course) files/{foldername}' "
-                         f"already in ({course_id=})")
+                        f"already in ({course_id=})")
             return -1
         folder_id = course.create_folder(foldername,
                                          parent_folder_path='/',
@@ -1583,19 +1590,19 @@ class CanvasRobot(object):
             nonlocal folder_changes
             nonlocal file_changes
             nonlocal course_id
-            for folder in file_or_folder.get_folders():
-                if not folder.locked:
-                    folder.update(locked=True)
+            for folder_ in file_or_folder.get_folders():
+                if not folder_.locked:
+                    folder_.update(locked=True)
                     folder_changes += 1
-                    logger.info(f"Corrected: Folder '{folder.full_name}' "
-                                 f"is now unpublished!")
-                unpublish_items(folder)
+                    logger.info(f"Corrected: Folder '{folder_.full_name}' "
+                                f"is now unpublished!")
+                unpublish_items(folder_)
             for file in file_or_folder.get_files():
                 if not file.locked:
                     if not check_only:
                         file_update(file, locked=True)
                         logger.info(f"Corrected: File '{file.display_name}' in {foldername} "
-                                     f"is now unpublished")
+                                    f"is now unpublished")
                         file_changes += 1
                     else:
                         logger.warning(f"File '{file.display_name}' in {foldername} is published!")
@@ -1611,7 +1618,7 @@ class CanvasRobot(object):
                 try:
                     if files_tab.visibility == "public":
                         logger.warning(f"Files folder of {course.name}"
-                                        f" ({course.id}) is visible")
+                                       f" ({course.id}) is visible")
                         # files_tab.visibility = "admins" # ! no change  without teachers approval!
                 except AttributeError:
                     logger.warning(f"Files tab visibility of {course.name} {course_id} missing")
@@ -1622,15 +1629,15 @@ class CanvasRobot(object):
                         folder.update(locked=True)
                         folder_changes += 1
                         logger.info(
-                                f"Folder '{foldername}' is now unpublished"
-                                f" in course {course.name}")
+                            f"Folder '{foldername}' is now unpublished"
+                            f" in course {course.name}")
                     else:
                         logger.warning(f"Folder '{foldername}' is published "
-                                        f"in course {course.name}({course.id})!")
+                                       f"in course {course.name}({course.id})!")
                 else:
                     logger.debug(
-                            f"Folder '{foldername}' was already "
-                            f"unpublished/locked in course {course.name}")
+                        f"Folder '{foldername}' was already "
+                        f"unpublished/locked in course {course.name}")
                 if files_too:
                     unpublish_items(folder)
                     # for f in folder.get_files():
