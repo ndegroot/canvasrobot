@@ -60,6 +60,7 @@ class CanvasConfig:
 
     def reset_keys(self):
         for field in self.api_fields:
+            # noinspection PyUnresolvedReferences
             try:
                 keyring.delete_password(self.namespace, field['key'])
             except keyring.errors.PasswordDeleteError:
@@ -101,7 +102,7 @@ SHORTNAMES = dict(
     theol_credo=4472,
     spirsam=7660)
 
-STUDADMIN = ('msnijder', 'jmooij')
+STUDADMIN = ('msnijder', 'smvries')
 
 now = datetime.now()
 # July first is considered the end of educational season
@@ -176,7 +177,7 @@ class LocalDAL(DAL):
 
         # To record a controlled set of names referring to examination assigments
         # We override the (sound) pyDAL principle to use course->id as reference
-        # because we need the canvas course_id for browserlinks
+        # because we need the canvas course_id for browser links
         # Note that Pydal create a foreign key to course->id we need to change using DBrowser
         self.define_table('examination',
                           Field('course',

@@ -1,7 +1,6 @@
 import logging
 import rich
 
-import canvasrobot
 import canvasrobot as cr
 
 logger = logging.getLogger("canvasrobot.canvasrobot")
