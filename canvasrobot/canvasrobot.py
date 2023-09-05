@@ -116,6 +116,13 @@ if MEMCACHED:
 
 # noinspection PyCallingNonCallable,GrazieInspection
 
+def course_get_folder(course,folder_name):
+    folders = course.get_folders()
+    for folder in list(folders):
+        if folder.full_name.endswith(folder_name):
+            return folder
+    return None
+
 
 def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
     def get_md():
@@ -133,7 +140,7 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
         pages = filter(lambda p: p.title[0:3] != 'UVT', pages)
         nr_pages = len(list(pages))
         assignments = course.get_assignments()
-        assignments_summary = "Assignments:\n"
+        assignments_summary = "Assignments:\n" if list(assignments) else "No assignments"
         examinations = []
         for assignment in assignments:
             if assignment.name not in ignore_assignment_names:
@@ -176,28 +183,25 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
         nr_assignments = len(list(assignments))
         quizzes = course.get_quizzes()
         nr_quizzes = len(list(quizzes))
-        files = course.get_files()
-        nr_files = len(list(files))
+        all_files = course.get_files()
+        nr_files = len(list(all_files))
+
         # check for uploaded examination files
-        examinations_summary = ""
         examination_files = 0
-        examination_folder_found = False
-        for file in files:
-            folder = course.get_folder(file.folder_id)
-            if f"/{EXAMINATION_FOLDER}" in folder.full_name:
-                examination_folder_found = True
+        examination_folder = course_get_folder(course,EXAMINATION_FOLDER)
+        examinations_summary = "" if examination_folder else f"No folder {EXAMINATION_FOLDER}"
+        if examination_folder:
+            files = examination_folder.get_files()
+            for file in files:
+                #folder = course.get_folder(file.folder_id)
+                #if f"/{EXAMINATION_FOLDER}" in folder.full_name:
+                    # examination_folder_found = True
                 examination_files += 1
                 examinations_summary += f"{file.display_name}\n"
-        if examination_files == 0:
-            if examination_folder_found:
-                examinations_summary += (f"No examination files in "
-                                         f"folder {EXAMINATION_FOLDER}\n")
-            else:
-                examinations_summary += f"No folder {EXAMINATION_FOLDER}\n"
-        else:
+
             examinations_summary += (f"\nTotal: {examination_files} "
-                                     f"examination files"
-                                     f"in {EXAMINATION_FOLDER}")
+                                     f"examination files ") if examination_files \
+                else f"No examination files"
         # was this working earlier 2.2.0 ?
         # try:
         #    collaborations = course.get_collaborations()
@@ -977,7 +981,10 @@ class CanvasRobot(object):
         return course_deleted and examination_deleted
 
     def update_record_db(self, qry, field, value):
-
+        """ using a select query
+        :param qry to find a record, update
+        :param field with the
+        :param value supplied"""
         db = self.db
         ud_fields = {field: value}
         # row = db(db[table][search_field] == search_id).select()
@@ -994,12 +1001,12 @@ class CanvasRobot(object):
                                     stop_list=None):
         """
             Using the canvasapi to read the TST courses for the selected year
-            (or a single course using canvas course_id or the siris id) and
+            (or a single course using canvas course_id or the osiris id) and
             - record internal_id course_id, fname and instructors in the
             table course
             - put teacher details in table user
             - collects info about assignments in assignment_summary
-            - collects info about examinations in examination_summary
+            - collects info about examinations files in examination_summary
             - reports new tentamination candidates
             :return number of added/updated rows
             """
@@ -1085,7 +1092,7 @@ class CanvasRobot(object):
                 course_id = db.course.update_or_insert(db.course.course_id == course.id,
                                                        course_id=course.id,
                                                        # status=course.workflow_state,
-                                                       course_code=course.course_code.split('-')[0],
+                                                       course_code=course.course_code,  #.split('-')[0],
                                                        sis_code=course.sis_course_id,
                                                        # year course_code and suffixes
                                                        name=course.name,

@@ -12,9 +12,10 @@ from rich.prompt import Prompt
 from tkinter import simpledialog
 
 
+# noinspection PyClassHasNoInit
 @define
 class CanvasConfig:
-    """" save the urls and API_key in a safe space using keyring (works on MacOS and Windows)"""
+    """" save the urls and API_key in a safe space using keyring (works on macOS and Windows)"""
     namespace = "canvasrobot"
     gui_root: object = None
     reset_api_keys: bool = False
