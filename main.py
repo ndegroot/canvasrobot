@@ -63,7 +63,8 @@ if __name__ == '__main__':
     # logging.info(f"{result} folder changes and file changes")
     #logging.getLogger().setLevel(logging.INFO)
     #logging.getLogger("canvasrobot.canvasrobot").setLevel(logging.INFO)
-    robot.create_folder_in_all_courses('Tentamens')
+    robot.create_folder_in_all_courses('Tentamens', report_only=False)
+    #robot.create_folder_in_course_files(34, 'Tentamens')
 
     # QUIZZES -----------------------------
     # COURSE_ID = 10387 # course_id van Sam

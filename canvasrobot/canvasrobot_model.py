@@ -99,6 +99,7 @@ SHORTNAMES = dict(
     bho1=4285,
     bho2=4440,
     bho3=4441,
+    bgo1=10540,
     theol_credo=4472,
     spirsam=7660)
 

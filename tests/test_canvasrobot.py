@@ -1,10 +1,10 @@
 import mock
 import builtins
 import pytest
+from canvasrobot.canvasrobot import Course2Foldername
 
 """
-1. note that this is real 
-   live testing
+1. note that this is real live testing
 2. please adjust the 4 constants below, 
 3. at first instance of CanvasRobot you have to supply
    the URL of your Canvas environment, your Canvas API key and 
@@ -18,8 +18,8 @@ import pytest
 
 ADMIN_ID = 6  # If no admin_id available: set to 0
 A_TEACHER_ID = 8  # choose a teacher/teacher_id from Canvas
-NR_COURSES_TEACHER = 4  # lookup number of courses for this teacher
-NR_COURSES_ADMIN = 130  # lookup using canvas website
+NR_COURSES_TEACHER = 5  # lookup number of courses for this teacher
+NR_COURSES_ADMIN = 158  # lookup using canvas website
 TEST_COURSE = 34  # first create this test course in Canvas
 TEST_COURSE_NR_ASSIGNMENTS = 8  # check if there are this number of assignments
 TEST_COURSE_NR_EXAMINATIONS = 3  # make sure there are this many files in folder Tentamens
@@ -108,3 +108,14 @@ def test_update_record_db(cr):
     cr.update_record_db(qry, "examinations_ok", False)
     course = cr.get_course_from_database(TEST_COURSE)
     assert course.examinations_ok is False
+
+def test_outliner_foldernames(cr):
+    cr.outliner_foldernames.append(Course2Foldername(34,"Tentamens"))
+    cr.outliner_foldernames.append(Course2Foldername(35,"Tentamens 3"))
+
+    output = cr.print_outliner_foldernames()
+
+    assert "34" in output, f"error in printing foldernames: {output}"
+    assert "35" in output, f"error in printing foldernames: {output}"
+    assert "Tentamens" in output, f"error in printing foldernames: {output}"
+    assert "Tentamens 3" in output, f"error in printing foldernames: {output}"

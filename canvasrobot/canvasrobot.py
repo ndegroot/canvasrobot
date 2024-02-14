@@ -1,4 +1,4 @@
-from typing import Optional, Union, Any
+from typing import Optional, Union, Callable
 import io
 import json
 import mimetypes
@@ -25,6 +25,7 @@ except ImportError:
     MEMCACHED = False
 #  from rich.logging import RichHandler
 from rich.progress import track
+# from rich.console import Console
 from canvasapi.course import Course  # type: ignore
 from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment  # type: ignore
 from canvasapi.util import combine_kwargs  # type: ignore
@@ -100,7 +101,10 @@ class Profile:
     # effective_locale str)
     # calendar str)
     # lti_user_id str)
-
+@define
+class Course2Foldername:
+    course_id: int
+    folder_name: str
 
 if MEMCACHED:
     try:
@@ -124,7 +128,8 @@ def course_get_folder(course,folder_name):
     return None
 
 
-def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
+def course_metadata_memcached(course_id, canvas, ignore_assignment_names=None):
+    ignore_assignment_names = ignore_assignment_names or []
     def get_md():
         course = canvas.get_course(course_id)
         modules = course.get_modules()
@@ -201,7 +206,7 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
 
             examinations_summary += (f"\nTotal: {examination_files} "
                                      f"examination files ") if examination_files \
-                else f"No examination files"
+                else "No examination files"
         # was this working earlier 2.2.0 ?
         # try:
         #    collaborations = course.get_collaborations()
@@ -231,13 +236,14 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names):
     return get_md()
 
 
-# noinspection PyTypeChecker
+# noinspection PyTypeChecker,PyCallingNonCallable
 class CanvasRobot(object):
     """" uses caching since """
-    db: Any
+    db: Callable
     canvas_login: bool = False
     TOT_WEIGHT: int = 100
     _year: int = AC_YEAR  # the current academic year
+    outliner_foldernames: list[Course2Foldername] = []
 
     def __init__(self,
                  reset_api_keys: bool = False,
@@ -261,6 +267,7 @@ class CanvasRobot(object):
         config = CanvasConfig(reset_api_keys=reset_api_keys, gui_root=gui_root)
         try:
             self.canvas = canvasapi.Canvas(config.url, config.api_key)
+            self.canvas_url = config.url
         except canvasapi.exceptions.Forbidden:
             logger.error("login Canvas failed (Forbidden) Wrong API key?")
             self.canvas_login = False
@@ -296,6 +303,20 @@ class CanvasRobot(object):
     def add_to_queue(self, msg, value):
         if self.queue:
             self.queue.put((msg, value))
+
+    def print(self, txt):
+        if self.console:
+            self.console(txt)
+        else:
+            print(txt)
+
+    def print_outliner_foldernames(self):
+        output = ""
+        for item in self.outliner_foldernames:
+            msg = f"\n{self.canvas_url}/{item.course_id}/files/folder/{item.folder_name}"
+            self.print(msg)
+            output+=msg
+        return output
 
     def add_message(self, msg, value):
         if self.queue:
@@ -399,7 +420,7 @@ class CanvasRobot(object):
             # print("There are {} modules in page".format(len(page)))
         return
 
-    def course_metadata(self, course_id, ignore_assignment_names):
+    def course_metadata(self, course_id, ignore_assignment_names=None):
         """
         return dict with metadata of this course
         as a dict.
@@ -578,9 +599,13 @@ class CanvasRobot(object):
             self.actions.append(f"{user.name} added to {course.name} as {role}")
         return
 
-    def add_observer_to_education(self, user):
+    def add_observer_to_education(self, user, edu_id, report_only=False):
         """ add user as an observer to all courses of an education"""
         # todo: select courses using membership of education using osiris ids
+        # not working just showing
+        if not report_only:
+            print("Add is not implemented!")
+        print('Showing ALL observers for ALL courses')
         print(user)
         # idea: filter course of an education using db
         for course in self.admin.get_courses():
@@ -1092,7 +1117,7 @@ class CanvasRobot(object):
                 course_id = db.course.update_or_insert(db.course.course_id == course.id,
                                                        course_id=course.id,
                                                        # status=course.workflow_state,
-                                                       course_code=course.course_code,  #.split('-')[0],
+                                                       course_code=course.course_code,
                                                        sis_code=course.sis_course_id,
                                                        # year course_code and suffixes
                                                        name=course.name,
@@ -1145,7 +1170,7 @@ class CanvasRobot(object):
     def is_user_valid(self, userinfo):
         """"":param userinfo (dict or named tuple or Storage with attributes id, login_id)
              :returns True for valid user, detail"""
-        if type(userinfo) == dict:
+        if isinstance(userinfo, dict):
             # import collections
             # User = collections.namedtuple('User', 'id')
             user = User(id=userinfo['id'])
@@ -1537,31 +1562,73 @@ class CanvasRobot(object):
             if tab.label == label:
                 return tab
 
-    def create_folder_in_course_files(self, course_id: int, foldername: str):
+    def create_folder_in_course_files(self, course_id: int, foldername: str,
+                                      locked=True, report_only=False):
         """
+        :param report_only: defaults to False, if true the folder is not created
+        :param locked: defaults to True, folder is unpublished and invisible for students
         :param foldername:
         :param course_id:
+        retuns folder_id of True if report_only is True and a folder would be created
         in course with 'course_id' create a folder 'foldername'"""
         course = self.get_course(course_id)
-
-        foldernames = [f.full_name for f in course.get_folders()]
-        if f"course files/{foldername}" in foldernames:
-            logger.info(f"No action needed: Folder '(course) files/{foldername}' "
+        folder_created = 0
+        def name_variant(source,target):
+            # match Tentamens, Tentamens 2020, etc but not tentamens/innner
+            # noinspection RegExpRedundantEscape
+            result = re.match(fr'^course files\/{source}(?!.*\/.*$)', target)
+            return result
+        folders_named_exact = [folder for folder in course.get_folders()
+                                  if f"course files/{foldername}" == folder.full_name]
+        folders_named_variants = [folder for folder in course.get_folders()
+                               if name_variant(foldername, folder.full_name)]
+        for folder in folders_named_variants:
+            # find/check folder(s) containing 'file_name' with possible postfixes
+            # like f'{file_name} 2025'
+            if folder.name != foldername: # variant, postfix
+                self.outliner_foldernames.append(Course2Foldername(course_id,
+                                                                   folder.full_name))
+            logger.info(f"No creation needed: Folder"
+                        f" '(course) files/{foldername}' "
                         f"already in ({course_id=})")
-            return -1
-        folder_id = course.create_folder(foldername,
-                                         parent_folder_path='/',
-                                         locked=True)
-        logger.info(f"Folder '(course) files/{foldername}' should be created now in ({course_id=})")
-        return folder_id
+            if not folder.locked and locked:
+                logger.warning(f"Folder {folder.full_name} was not locked, locking it "
+                               f"and its childern now!")
+                folder.update(locked = locked)
+                _num_items=self.unpublish_folderitems_in_course(course_id,
+                                                     foldername=folder.full_name,
+                                                     files_too=True,
+                                                     check_only=False)
+        if len(folders_named_exact) == 0: # original folder simply not there
+            if report_only:
+                logger.info(f"Folder '(course) files/{foldername}' "
+                            f"would be created now in ({course_id=})")
+            else:
+                folder_id = course.create_folder(foldername,
+                                                 parent_folder_path='/',
+                                                 locked=locked)
+                logger.info(f"Folder '(course) files/{foldername}' ({folder_id}) is created "
+                            f"as {locked=} now in ({course_id=})")
+            folder_created+=1
 
-    def create_folder_in_all_courses(self, foldername):
+        return folder_created
 
+
+    def create_folder_in_all_courses(self, foldername,
+                                     locked=True,
+                                     report_only=False):
+
+        folders_created = 0
         for course in track(self.get_all_active_courses(from_db=False),
                             description="All current courses...",
                             console=self.console):
-            self.create_folder_in_course_files(course.id, foldername)
-
+            folders_created += self.create_folder_in_course_files(course.id, foldername,
+                                                        locked=True,report_only=report_only)
+        logger.info(f"{folders_created} folders"
+                    f"{' would be' if report_only else ''} created")
+        for course_id, foldername  in self.outliner_foldernames:
+            txt = f'Found {foldername} in https://{self.canvas_url}/{course_id}/files'
+            self.print(txt)
     def unpublish_subfolder_in_all_courses(self,
                                            foldername: str,
                                            files_too: bool = False,
