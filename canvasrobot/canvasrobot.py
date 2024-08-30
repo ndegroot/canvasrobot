@@ -21,7 +21,7 @@ try:  # type: ignore
 
     MEMCACHED: Union[base.Client, bool] = True
 except ImportError:
-    print("No memcaching")
+    print("No memcaching supported")
     MEMCACHED = False
 #  from rich.logging import RichHandler
 from rich.progress import track
@@ -31,11 +31,11 @@ from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment  # type: ig
 from canvasapi.util import combine_kwargs  # type: ignore
 from openpyxl.utils import get_column_letter  # type: ignore
 from openpyxl.workbook import Workbook  # type: ignore
-from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder  # type: ignore
+from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder
 from socket import gaierror, timeout
 from .canvasrobot_model import (AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES,  # type: ignore
                                 EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig,
-                                EXAMINATION_FOLDER)  # type: ignore
+                                EXAMINATION_FOLDER, COMMUNITY_EDU_IDS)  # type: ignore
 from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, \
     Stats  # type: ignore
 
@@ -101,10 +101,13 @@ class Profile:
     # effective_locale str)
     # calendar str)
     # lti_user_id str)
+
+
 @define
 class Course2Foldername:
     course_id: int
     folder_name: str
+
 
 if MEMCACHED:
     try:
@@ -120,7 +123,7 @@ if MEMCACHED:
 
 # noinspection PyCallingNonCallable,GrazieInspection
 
-def course_get_folder(course,folder_name):
+def course_get_folder(course, folder_name):
     folders = course.get_folders()
     for folder in list(folders):
         if folder.full_name.endswith(folder_name):
@@ -130,6 +133,7 @@ def course_get_folder(course,folder_name):
 
 def course_metadata_memcached(course_id, canvas, ignore_assignment_names=None):
     ignore_assignment_names = ignore_assignment_names or []
+
     def get_md():
         course = canvas.get_course(course_id)
         modules = course.get_modules()
@@ -145,7 +149,8 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names=None):
         pages = filter(lambda p: p.title[0:3] != 'UVT', pages)
         nr_pages = len(list(pages))
         assignments = course.get_assignments()
-        assignments_summary = "Assignments:\n" if list(assignments) else "No assignments"
+        assignments_summary = "Assignments:\n" if list(assignments) \
+            else "No assignments"
         examinations = []
         for assignment in assignments:
             if assignment.name not in ignore_assignment_names:
@@ -193,14 +198,15 @@ def course_metadata_memcached(course_id, canvas, ignore_assignment_names=None):
 
         # check for uploaded examination files
         examination_files = 0
-        examination_folder = course_get_folder(course,EXAMINATION_FOLDER)
-        examinations_summary = "" if examination_folder else f"No folder {EXAMINATION_FOLDER}"
+        examination_folder = course_get_folder(course, EXAMINATION_FOLDER)
+        examinations_summary = "" if examination_folder \
+            else f"No folder {EXAMINATION_FOLDER}"
         if examination_folder:
             files = examination_folder.get_files()
             for file in files:
-                #folder = course.get_folder(file.folder_id)
-                #if f"/{EXAMINATION_FOLDER}" in folder.full_name:
-                    # examination_folder_found = True
+                # folder = course.get_folder(file.folder_id)
+                # if f"/{EXAMINATION_FOLDER}" in folder.full_name:
+                # examination_folder_found = True
                 examination_files += 1
                 examinations_summary += f"{file.display_name}\n"
 
@@ -313,9 +319,10 @@ class CanvasRobot(object):
     def print_outliner_foldernames(self):
         output = ""
         for item in self.outliner_foldernames:
-            msg = f"\n{self.canvas_url}/{item.course_id}/files/folder/{item.folder_name}"
+            msg = (f"\n{self.canvas_url}/{item.course_id}"
+                   f"/files/folder/{item.folder_name}")
             self.print(msg)
-            output+=msg
+            output += msg
         return output
 
     def add_message(self, msg, value):
@@ -424,7 +431,7 @@ class CanvasRobot(object):
         """
         return dict with metadata of this course
         as a dict.
-        ignore the submissions of assigments present in ignore_assignment_names
+        ignore the submissions of assignments present in ignore_assignment_names
         the others are reported in assignments_summary
         :returns md: CourseMetadata"""
         ignore_assignment_names = ignore_assignment_names or []
@@ -536,6 +543,8 @@ class CanvasRobot(object):
         except requests.exceptions.ConnectionError:
             raise DibsaRetrieveError(f"Unable to connect to source "
                                      f"Dibsa @ {url} maybe first start web2py locally")
+        if r.status_code != 200:
+            raise DibsaRetrieveError(r.text)
         try:
             json_result = r.json()
         except json.decoder.JSONDecodeError:
@@ -548,14 +557,10 @@ class CanvasRobot(object):
         return json_result
 
     def get_students_for_community(self, c_id):
+        """given a community id
+        retrieve the students from local dibsa/ldap"""
 
-        community_edu_ids = {'banl': ['banl', 'pm-ma', 'pm-ulo'],  # nl
-                             'bauk': ['bauk', 'pm-macs'],  # uk
-                             'ma': ['ma'],
-                             'ulo': ['ulo'],
-                             'macs': ['macs'],
-                             'acskills': [edu.lower() for edu in EDUCATIONS]
-                             }
+        community_edu_ids = COMMUNITY_EDU_IDS
         # edu_ids = [edu.lower() for edu in EDUCATIONS]
         # if c_id == 'acskills' else  if c_id == 'banl' else [c_id]
         edu_ids = community_edu_ids[c_id]
@@ -565,10 +570,20 @@ class CanvasRobot(object):
             try:
                 students_dibsa += self.get_students_dibsa(edu_id.upper())
             except DibsaRetrieveError as e:
+                msg = f"Unable to retrieve students for {edu_id}"
                 logger.error(e)
-                raise
+                raise DibsaRetrieveError(msg)
+            if isinstance(students_dibsa, str):
+                msg = f"Unable to retrieve students for {edu_id}"
+                logger.error(msg)
+                raise DibsaRetrieveError(msg)
         for student in students_dibsa:
-            username = student['username']
+            try:
+                username = student['username']
+            except TypeError as e:
+                logger.error(e)
+                continue
+
             user = self.search_user(username)
             if not user:
                 continue
@@ -585,7 +600,7 @@ class CanvasRobot(object):
         try:
             course = self.get_course(COMMUNITIES[c_id])
         except IndexError:
-            return None, ["wrong c_id"]
+            return None, [f"wrong c_id:{c_id}"]
 
         return course
 
@@ -593,13 +608,27 @@ class CanvasRobot(object):
         try:
             course.enroll_user(user, role)
         except (canvasapi.exceptions.BadRequest,
-                canvasapi.exceptions.Conflict):
-            self.errors.append(f'User {user.name} not added to {course.name}')
+                canvasapi.exceptions.Conflict) as e:
+            self.errors.append(f'User {user.name} not added to {course.name}: {e}')
         else:
             self.actions.append(f"{user.name} added to {course.name} as {role}")
         return
 
-    def add_observer_to_education(self, user, edu_id, report_only=False):
+    def enroll_students_in_communities(self):
+        """for each community
+        retrieve the students from local dibsa/ldap
+        and enroll them"""
+
+        community_edu_ids = COMMUNITY_EDU_IDS
+        for c_id in community_edu_ids:
+            # cleanup
+            students = self.get_students_for_community(c_id)
+            for student in students:
+                course = self.get_course(COMMUNITIES[c_id])
+                role_student = ENROLLMENT_TYPES['student']
+                self.enroll_user_in_course(student, course, role=role_student)
+
+    def add_observer_to_education(self, user, report_only=False):
         """ add user as an observer to all courses of an education"""
         # todo: select courses using membership of education using osiris ids
         # not working just showing
@@ -713,7 +742,8 @@ class CanvasRobot(object):
     #         url = self.base_url + (self.commands[command].format(params)
     #                                if params else self.commands[command])
     #     except Exception:
-    #         raise NotImplementedError(f"error in command {command} or params {params}")
+    #         raise NotImplementedError(f"error in command
+    #         {command} or params {params}")
     #     else:
     #         try:
     #             self.browser.get(url)
@@ -762,7 +792,9 @@ class CanvasRobot(object):
     #     return count, count_students
 
     def get_courses_data(self):
-        """ for all courses: get a matrix and labels course name and other fields from db
+        """
+        for all courses: get a matrix and labels course name
+        and other fields from db
         :return: features-matrix, labels """
 
         db = self.db  # cosmetic reasons
@@ -838,8 +870,9 @@ class CanvasRobot(object):
     #         #     # test_file_name = bb_files[0].fname
     #         #     self.update_documents(bb_files)  # record data files in database
     #         #     total_files += bb_files
-    #     return "{} courses scanned {} files found".format(len(courses),
-    #                                                       len(total_files) if total_files else 0)
+    #     return "{} courses scanned {} files found".format(
+    #     len(courses),
+    #     len(total_files) if total_files else 0)
 
     # the delegates ---
     # noinspection PyRedeclaration
@@ -946,17 +979,18 @@ class CanvasRobot(object):
         # include the NULL values
         if single_course:
             qry = ((db.course.course_id == single_course) &
-                   (db.examination.course == db.course.course_id) &  # join examination courses
+                   (db.examination.course == db.course.course_id) &  # join
                    (db.examination.candidate ==
                     candidate)) \
                 if candidate else ((db.course.course_id == single_course) &
                                    (db.examination.course == db.course.course_id))
         else:
             qry = ((db.course.ac_year == self.year) &
-                   (db.examination.course == db.course.course_id) &  # join examination courses
+                   (db.examination.course == db.course.course_id) &  # join
                    (db.examination.candidate ==
                     candidate)) if candidate else ((db.course.ac_year == self.year) &
-                                                   (db.examination.course == db.course.course_id))
+                                                   (db.examination.course ==
+                                                    db.course.course_id))
         orderby = orderby or db.course.course_code
         records = db(qry).select(db.examination.id,
                                  db.examination.course,
@@ -1068,7 +1102,8 @@ class CanvasRobot(object):
             logger.debug("course: {}".format(course.name))  # course
             students = course.get_users(enrollment_type="student", )
             # remove student with name=='Test Student'
-            nr_students = len(list(filter(lambda s: s.name != 'Test student', list(students))))
+            nr_students = len(list(filter(lambda s: s.name != 'Test student',
+                                          list(students))))
             teachers = course.get_users(enrollment_type="teacher")
             teachers_ids = []
             for teacher in teachers:
@@ -1106,7 +1141,8 @@ class CanvasRobot(object):
             inserted_id = None
             format_str = "%Y-%m-%dT%H:%M:%SZ"
             creation_date = datetime.strptime(course.created_at, format_str)
-            ignore_examinations = self.get_examinations_from_database(single_course=single_course)
+            ignore_examinations = (
+                self.get_examinations_from_database(single_course=single_course))
             # filter: we need only our course.id with candidate False
             ignore_examination_names = [row.name for row in ignore_examinations
                                         if (row.course == course.id and row.ignore)]
@@ -1168,8 +1204,10 @@ class CanvasRobot(object):
         return num_rows
 
     def is_user_valid(self, userinfo):
-        """"":param userinfo (dict or named tuple or Storage with attributes id, login_id)
-             :returns True for valid user, detail"""
+        """"
+        :param userinfo (dict or named tuple or Storage with
+        attributes id, login_id)
+        :returns True for valid user, detail"""
         if isinstance(userinfo, dict):
             # import collections
             # User = collections.namedtuple('User', 'id')
@@ -1224,7 +1262,7 @@ class CanvasRobot(object):
         # errors = []
 
         def filter_student(enrollment):
-            """"filter the real students"""
+            """filter the real students"""
             try:
                 is_real_student = (enrollment.user['name'].lower() != 'test student' and
                                    enrollment.role == 'StudentEnrollment')
@@ -1238,6 +1276,10 @@ class CanvasRobot(object):
         return enrollments
 
     def cleanup_community(self, c_id, report_only):
+        """
+        given an id of a community (course)
+        remove invalid enrollments
+        """
         # result = self.check_c_cid(c_id)
         # if result != 'ok':
         #    return result
@@ -1277,14 +1319,15 @@ class CanvasRobot(object):
         """examples:
         Klein, Wim
         Groot, Nico de
-        Goyvaert, Samuel (Sam)
+        Govaert, Samuel (Sam)
         Wieringen, Archibald (H.M.J.)
         """
 
         assert ", " in user.sortable_name, "sortable_name should contain comma"
         source = user.sortable_name
         pat = re.compile(
-            r'(?P<last_name>[\w \-]+), (?P<first_name>\w+)\s?((\((?P<first_name_par>\w+)\))|'
+            r'(?P<last_name>[\w \-]+), (?P<first_name>\w+)'
+            r'\s?((\((?P<first_name_par>\w+)\))|'
             r'(\((?P<init>[\w.]+.)\)))?(\s*(?P<prefix>\w+))?')
         d = re.match(pat, source)
         if not d:
@@ -1415,7 +1458,7 @@ class CanvasRobot(object):
             'integer': NamedStyle(name='int', number_format='#,##0'),
             'price': NamedStyle(name='money', font=Font(italic=True),
                                 fill=PatternFill(fill_type='solid', fgColor='404040'),
-                                number_format=u'[$\u20ac-1] #,##0.00 '),  # unicode for €
+                                number_format=u'[$\u20ac-1] #,##0.00 '),  # unicode €
             'double': NamedStyle(name='double', number_format='#0.000000'),
             'grade': NamedStyle(name='grade', number_format='#0.00'),
             'percentage': NamedStyle(name='score', number_format='#0.00'),
@@ -1473,7 +1516,8 @@ class CanvasRobot(object):
         ws.print_title_rows = '1:6'
         wb.save(filename=dest_filename)
 
-        return f"Excel file {dest_filename} created with {len(grades)} rows", dest_filename
+        return (f"Excel file {dest_filename} created "
+                f"with {len(grades)} rows"), dest_filename
 
     def create_quiz(self, course_id: int, title: str, quiz_type: str = '') -> int:
         """
@@ -1566,26 +1610,29 @@ class CanvasRobot(object):
                                       locked=True, report_only=False):
         """
         :param report_only: defaults to False, if true the folder is not created
-        :param locked: defaults to True, folder is unpublished and invisible for students
+        :param locked: defaults to True, folder is unpublished and invisible
+        for students
         :param foldername:
         :param course_id:
-        retuns folder_id of True if report_only is True and a folder would be created
+        :returns folder_id of True if report_only is True and a folder would be created
         in course with 'course_id' create a folder 'foldername'"""
         course = self.get_course(course_id)
         folder_created = 0
-        def name_variant(source,target):
-            # match Tentamens, Tentamens 2020, etc but not tentamens/innner
+
+        def name_variant(source, target):
+            # match Tentamens, Tentamens 2020, etc but not tentamens/inner
             # noinspection RegExpRedundantEscape
             result = re.match(fr'^course files\/{source}(?!.*\/.*$)', target)
             return result
+
         folders_named_exact = [folder for folder in course.get_folders()
-                                  if f"course files/{foldername}" == folder.full_name]
+                               if f"course files/{foldername}" == folder.full_name]
         folders_named_variants = [folder for folder in course.get_folders()
-                               if name_variant(foldername, folder.full_name)]
+                                  if name_variant(foldername, folder.full_name)]
         for folder in folders_named_variants:
             # find/check folder(s) containing 'file_name' with possible postfixes
             # like f'{file_name} 2025'
-            if folder.name != foldername: # variant, postfix
+            if folder.name != foldername:  # variant, postfix
                 self.outliner_foldernames.append(Course2Foldername(course_id,
                                                                    folder.full_name))
             logger.info(f"No creation needed: Folder"
@@ -1593,13 +1640,13 @@ class CanvasRobot(object):
                         f"already in ({course_id=})")
             if not folder.locked and locked:
                 logger.warning(f"Folder {folder.full_name} was not locked, locking it "
-                               f"and its childern now!")
-                folder.update(locked = locked)
-                _num_items=self.unpublish_folderitems_in_course(course_id,
-                                                     foldername=folder.full_name,
-                                                     files_too=True,
-                                                     check_only=False)
-        if len(folders_named_exact) == 0: # original folder simply not there
+                               f"and its children now!")
+                folder.update(locked=locked)
+                _num_items = self.unpublish_folderitems_in_course(course_id,
+                                                                  foldername=folder.full_name,
+                                                                  files_too=True,
+                                                                  check_only=False)
+        if len(folders_named_exact) == 0:  # original folder simply not there
             if report_only:
                 logger.info(f"Folder '(course) files/{foldername}' "
                             f"would be created now in ({course_id=})")
@@ -1607,12 +1654,12 @@ class CanvasRobot(object):
                 folder_id = course.create_folder(foldername,
                                                  parent_folder_path='/',
                                                  locked=locked)
-                logger.info(f"Folder '(course) files/{foldername}' ({folder_id}) is created "
+                logger.info(f"Folder '(course) "
+                            f"files/{foldername}' ({folder_id}) is created "
                             f"as {locked=} now in ({course_id=})")
-            folder_created+=1
+            folder_created += 1
 
         return folder_created
-
 
     def create_folder_in_all_courses(self, foldername,
                                      locked=True,
@@ -1623,19 +1670,22 @@ class CanvasRobot(object):
                             description="All current courses...",
                             console=self.console):
             folders_created += self.create_folder_in_course_files(course.id, foldername,
-                                                        locked=True,report_only=report_only)
+                                                                  locked=locked,
+                                                                  report_only=report_only)
         logger.info(f"{folders_created} folders"
                     f"{' would be' if report_only else ''} created")
-        for course_id, foldername  in self.outliner_foldernames:
+        for course_id, foldername in self.outliner_foldernames:
             txt = f'Found {foldername} in https://{self.canvas_url}/{course_id}/files'
             self.print(txt)
+
     def unpublish_subfolder_in_all_courses(self,
                                            foldername: str,
                                            files_too: bool = False,
                                            check_only: bool = False):
         for course in track(self.get_all_active_courses(from_db=False),
                             description=(f"Checking all current"
-                                         f" courses for folder '{foldername}'..." if check_only
+                                         f" courses "
+                                         f"for folder '{foldername}'..." if check_only
                             else f"Unpublish all published folder {foldername}..."),
                             console=self.console):
             if course.name.endswith("_conclude"):
@@ -1675,11 +1725,13 @@ class CanvasRobot(object):
                 if not file.locked:
                     if not check_only:
                         file_update(file, locked=True)
-                        logger.info(f"Corrected: File '{file.display_name}' in {foldername} "
+                        logger.info(f"Corrected: File "
+                                    f"'{file.display_name}' in {foldername} "
                                     f"is now unpublished")
                         file_changes += 1
                     else:
-                        logger.warning(f"File '{file.display_name}' in {foldername} is published!")
+                        logger.warning(f"File '{file.display_name}' "
+                                       f"in {foldername} is published!")
 
         # files_folder = 'course files'
         course_ids_missing_folder = []
@@ -1693,9 +1745,11 @@ class CanvasRobot(object):
                     if files_tab.visibility == "public":
                         logger.warning(f"Files folder of {course.name}"
                                        f" ({course.id}) is visible")
-                        # files_tab.visibility = "admins" # ! no change  without teachers approval!
+                        # files_tab.visibility = "admins"
+                        # ! no change  without teachers approval!
                 except AttributeError:
-                    logger.warning(f"Files tab visibility of {course.name} {course_id} missing")
+                    logger.warning(f"Files tab visibility of "
+                                   f"{course.name} {course_id} missing")
 
                 # folder_id = folder.id
                 if not folder.locked:

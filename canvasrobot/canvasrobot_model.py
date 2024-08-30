@@ -15,7 +15,9 @@ from tkinter import simpledialog
 # noinspection PyClassHasNoInit
 @define
 class CanvasConfig:
-    """" save the urls and API_key in a safe space using keyring (works on macOS and Windows)"""
+    """"
+    save the urls and API_key in a safe space using
+    keyring (works on macOS and Windows)"""
     namespace = "canvasrobot"
     gui_root: object = None
     reset_api_keys: bool = False
@@ -64,7 +66,8 @@ class CanvasConfig:
             try:
                 keyring.delete_password(self.namespace, field['key'])
             except keyring.errors.PasswordDeleteError:
-                logging.info(f"key '{field['key']}' not found in '{self.namespace}' keyring storage")
+                logging.info(f"key '{field['key']}' not found in "
+                             f"'{self.namespace}' keyring storage")
                 pass
 
 
@@ -81,8 +84,20 @@ EDUCATIONS = ('BANL',
               'PM-ULO',
               'MACS',
               'PM-MACS',
+              'GV',
+              'PM-GV',
               'BIJVAK'
               )
+
+COMMUNITY_EDU_IDS = {'banl': ['banl', 'pm-ma', 'pm-ulo', 'pm-gv'],  # nl
+                     'bauk': ['bauk', 'pm-macs'],  # uk
+                     'ma': ['ma'],
+                     'gv': ['gv'],
+                     'ulo': ['ulo'],
+                     'macs': ['macs'],
+                     'acskills': [edu.lower() for edu in EDUCATIONS]
+                     }
+
 # the 'communities-courses'
 
 
@@ -93,7 +108,8 @@ COMMUNITIES = dict(
     bauk=4227,
     ma=4228,
     ulo=4229,
-    macs=4230)
+    macs=4230,
+    gv=16066)
 
 SHORTNAMES = dict(
     bho1=4285,
@@ -103,7 +119,8 @@ SHORTNAMES = dict(
     theol_credo=4472,
     spirsam=7660)
 
-STUDADMIN = ('msnijder', 'smvries')
+STUDADMIN = ('rsackman',
+             'smvries')
 
 now = datetime.now()
 # July first is considered the end of educational season
@@ -176,10 +193,11 @@ class LocalDAL(DAL):
                           plural='LMS courses',
                           format='%(name)s[%(teacher_names)s]')
 
-        # To record a controlled set of names referring to examination assigments
+        # To record a controlled set of names referring to examination assignments
         # We override the (sound) pyDAL principle to use course->id as reference
         # because we need the canvas course_id for browser links
-        # Note that Pydal create a foreign key to course->id we need to change using DBrowser
+        # Note that Pydal create a foreign key to course->id we need to change
+        # using DBrowser
         self.define_table('examination',
                           Field('course',
                                 'reference course',
@@ -220,9 +238,10 @@ class LocalDAL(DAL):
                           Field('role', 'string',
                                 requires=valid_roles))
 
-        # self.course.no_students = Field.Virtual('no_students',
-        #                                       lambda row: self.((self.course2user.course == row.course.id) &
-        #                                                         (self.course2user.role == 'S')).count())
+        # self.course.no_students = Field.Virtual(
+        #   'no_students',
+        #   lambda row: self.((self.course2user.course == row.course.id) &
+        #                     (self.course2user.role == 'S')).count())
 
         self.define_table('submission',
                           Field('submission_id', 'integer'),
