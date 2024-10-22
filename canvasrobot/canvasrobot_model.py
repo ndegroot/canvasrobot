@@ -76,6 +76,7 @@ ENROLLMENT_TYPES = {'student': 'StudentEnrollment',
                     'ta': 'TaEnrollment',
                     'observer': 'ObserverEnrollment',
                     'designer': 'DesignerEnrollment'}
+# School specific
 EDUCATIONS = ('BANL',
               'BAUK',
               'MA',
@@ -201,7 +202,7 @@ class LocalDAL(DAL):
         self.define_table('examination',
                           Field('course',
                                 'reference course',
-                                requires=validators.IS_IN_DB(self, 'course.course_id',
+                                requires=validators.IS_IN_DB(self, 'id',
                                                              self.course._format)),
                           Field('course_name', 'string'),  # a bit redundant
                           Field('name', 'string'),

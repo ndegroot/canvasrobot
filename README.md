@@ -2,10 +2,12 @@
 Library which uses
 [Canvasapi](https://canvasapi.readthedocs.io/en/stable/getting-started.html)
 to provide a CanvasRobot class for GUI and commandline use (Rich)
-Uses 
-Used in word2quiz library.
+## Uses 
+...
+## Used 
+in word2quiz library.
 
-Not ready for general use...
+Not yet ready for general use...
 
 ## Examples:
 ```Python

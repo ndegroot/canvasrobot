@@ -5,22 +5,33 @@ import pytest
 import configparser
 import getpass
 import pathlib
+
+import urllib3.connectionpool
+
 from canvasrobot import CanvasRobot
 
-#from pymemcache.client import base
+# from pymemcache.client import base
+
 
 def dropdb(thedb):
     for table_name in thedb.tables():
         thedb[table_name].drop()
     thedb.commit()
+
+
 @pytest.fixture(scope='session')
 def cr():
     """ Fixture to set up the test database with test data """
-    cr = CanvasRobot(is_testing=True)
+    try:
+        cr = CanvasRobot(is_testing=True)
+    except urllib3.connectionpool.MaxRetryError:
+        print("No connection made to CanvasRobot.")
     # do something to initialise
     # localDAL handles truncate of the tables if is_testing
-    yield cr
+    else:
+        yield cr
     # do something to teardown
+
 
 @pytest.fixture(scope='session')
 def suspend_capture(pytestconfig):

@@ -13,6 +13,7 @@ import attrs
 from attrs import define, asdict
 import canvasapi  # type: ignore
 import requests
+from openpyxl.styles.builtins import total
 
 # from functools import lru_cache
 try:  # type: ignore
@@ -50,7 +51,7 @@ logger.setLevel(logging.INFO)
 # noinspection PyProtectedMember
 def file_update(file, **kwargs):
     """
-        Updates a file.
+        Updates a file in a course
         :calls: `PUT /api/v1/files/:id \
         <https://canvas.instructure.com/doc/api/files.html#method.files.update>`_
         :rtype: :class:`canvasapi.file.File`
@@ -123,7 +124,13 @@ if MEMCACHED:
 
 # noinspection PyCallingNonCallable,GrazieInspection
 
-def course_get_folder(course, folder_name):
+def course_get_folder(course, folder_name: str):
+    """"
+    :course     Canvas course object
+    :foldername Nane of the folder
+    :returns    Canvas folder object
+
+     """
     folders = course.get_folders()
     for folder in list(folders):
         if folder.full_name.endswith(folder_name):
@@ -131,10 +138,28 @@ def course_get_folder(course, folder_name):
     return None
 
 
-def course_metadata_memcached(course_id, canvas, ignore_assignment_names=None):
+def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=None) -> CourseMetadata:
+    """"
+    :course_id
+    :canvas                     the canvas api object
+    :ignore_assignment_names
+    :returns Course metadata instance
+    """
     ignore_assignment_names = ignore_assignment_names or []
 
     def get_md():
+        """ for statistical purposes:
+        using the course_id:
+        set canvas course var
+        modules to point ar the canvas modules of this course
+        'metadata vars about:
+        - modules
+        - quizzes
+        - pages
+        - assignments
+        - submissions
+        :returns course metadata object
+        """
         course = canvas.get_course(course_id)
         modules = course.get_modules()
         nr_modules = len(list(modules))
@@ -316,7 +341,7 @@ class CanvasRobot(object):
         else:
             print(txt)
 
-    def print_outliner_foldernames(self):
+    def print_outliner_foldernames(self) -> str:
         output = ""
         for item in self.outliner_foldernames:
             msg = (f"\n{self.canvas_url}/{item.course_id}"
@@ -381,6 +406,10 @@ class CanvasRobot(object):
 
     @staticmethod
     def create_profile(profile_dict):
+        """
+        based on :profile_fict
+        :returns Canvas profile or TypeError
+        """
         try:
             profile = Profile(**profile_dict)
         except TypeError as e:
@@ -440,10 +469,17 @@ class CanvasRobot(object):
         return md_result
 
     def enroll_in_course(self,
-                         search: str,
+                         search: str,  # todo: change name
                          course_id: int,
                          username,
                          enrollment_type: str) -> str:
+        """
+        :param search: if given get course using osiris_id
+        :param course_id: course_id
+        :param username:
+        :param enrollment_type:
+        :returns: result of course enrollment as a str...
+        """
         if search:
             try:
                 course = self.get_course_using_osiris_id(search)
@@ -469,7 +505,7 @@ class CanvasRobot(object):
         return f"Enrolled {user} in {course} as {enrollment_type}"
 
     def get_all_active_courses(self, from_db=True):
-        """"":returns list of all TST course canvas course """
+        """:returns list of all canvas courses for this subadmin account"""
 
         def cur_year_active(course):
             """ filter function"""
@@ -535,14 +571,14 @@ class CanvasRobot(object):
 
     @staticmethod
     def get_students_dibsa(c_name):
-        """get students from (local) DIBSA CRM"""
+        """get list of students from (local) DIBSA CRM"""
         # idea:  use LDAP instead
         url = f'http://127.0.0.1:8000/dibsa/service/call/json/students/{c_name}'
         try:
             r = requests.get(url)
         except requests.exceptions.ConnectionError:
             raise DibsaRetrieveError(f"Unable to connect to source "
-                                     f"Dibsa @ {url} maybe first start web2py locally")
+                                     f"Dibsa @ {url} maybe first start web2py locally?")
         if r.status_code != 200:
             raise DibsaRetrieveError(r.text)
         try:
@@ -557,8 +593,10 @@ class CanvasRobot(object):
         return json_result
 
     def get_students_for_community(self, c_id):
-        """given a community id
-        retrieve the students from local dibsa/ldap"""
+        """given
+        :param c_id community id
+        retrieve the students from local dibsa/ldap
+        :returns list of Canvas students"""
 
         community_edu_ids = COMMUNITY_EDU_IDS
         # edu_ids = [edu.lower() for edu in EDUCATIONS]
@@ -969,6 +1007,28 @@ class CanvasRobot(object):
         db.commit()
         return counters
 
+    def search_replace_in_page(self, page, source, target, dryrun=False):
+        if dryrun:
+            new_body, count = re.subn(source, '>'+source+'<', page.body)
+        else:
+            new_body, count = re.subn(source, target, page.body)
+            # update page
+            page.edit(wiki_page=dict(body=new_body))
+            new_body = ""
+        return count, new_body
+
+    def course_search_replace_pages(self, course_id, source, target, dryrun=False):
+        """In a course replace text or html in all pages"""
+        total_count = 0
+        course = canvas.get_course(course_id)
+        pages = course.get_pages(include=['body'])
+        pages = filter(lambda p: p.title[0:3] != 'UVT', pages)  # skip
+        for page in pages:
+            if source in page.body:
+                count, _ = search_replace_in_page(page, source, target, dryrun)
+                total_count += count
+        return total_count
+
     def get_examinations_from_database(self,
                                        single_course=None,
                                        orderby=None,
@@ -1184,7 +1244,7 @@ class CanvasRobot(object):
                 _ = db.examination.update_or_insert((db.examination.course ==
                                                      item.course_id) &
                                                     (db.examination.name == item.name),
-                                                    course=item.course_id,
+                                                    course=course_id,
                                                     course_name=item.course_name,
                                                     name=item.name
                                                     )
