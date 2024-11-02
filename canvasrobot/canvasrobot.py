@@ -1,4 +1,4 @@
-from typing import Optional, Union, Callable
+from typing import Tuple, Optional, Union, Callable
 import io
 import json
 import mimetypes
@@ -299,7 +299,7 @@ class CanvasRobot(object):
         try:
             self.canvas = canvasapi.Canvas(config.url, config.api_key)
             self.canvas_url = config.url
-        except canvasapi.exceptions.Forbidden:
+        except (canvasapi.exceptions.Forbidden, ConnectionError):
             logger.error("login Canvas failed (Forbidden) Wrong API key?")
             self.canvas_login = False
         else:
@@ -307,9 +307,10 @@ class CanvasRobot(object):
                 logger.error("login Canvas failed")
                 self.canvas_login = False
         try:
+
             self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
                 else None
-        except canvasapi.exceptions.Forbidden:
+        except (canvasapi.exceptions.Forbidden, ConnectionError, Exception):
             self.admin = None
 
         self.teacher_ids = self.lookup_teachers_db()
@@ -356,22 +357,16 @@ class CanvasRobot(object):
         if self.console:
             self.console.print(f"{msg}:{value=}" if value else msg)
 
-    def lookup_teachers_db(self):
-        db = self.db
-        teachers = db((db.course2user.role == 'T') &
-                      (db.course2user.user == db.user.id)).select(db.user.user_id,
-                                                                  distinct=True)
-        teacher_ids = [teacher.user_id for teacher in teachers]
-        return teacher_ids
-
     # COURSES----------------------------------------
     def get_course(self, course_id: int):
-        """"":returns canvas course by its id"""
+        """""
+        :param course_id
+        :returns canvas course by its id"""
         return self.canvas.get_course(course_id)
 
     def get_courses(self, enrollment_type: str = "teacher"):
         """"
-        :enrollment_type 'teacher'(default), 'student','ta', 'observer' 'designer'
+        :param enrollment_type 'teacher'(default), 'student','ta', 'observer' 'designer'
         :returns canvas courses for current user in role"""
         return self.canvas.get_courses(enrollment_type=enrollment_type)
 
@@ -379,7 +374,7 @@ class CanvasRobot(object):
                                by_teachers: Optional[list] = None,
                                this_year=True):
         """
-        get all course in account here use_is has the role/type [enrollment_type]
+        get all courses in account here use_is has the role/type [enrollment_type]
         :param by_teachers: list of teacher id's
         :param this_year: True=filter courses to include only the current year
         :returns list of courses
@@ -395,67 +390,6 @@ class CanvasRobot(object):
             courses.append(course)
         return courses
 
-    # USER ----------------------------------------
-    def get_user(self, user_id: int):
-        """
-        get user using
-        :param user_id:
-        :returns user
-        """
-        return self.canvas.get_user(user_id)
-
-    @staticmethod
-    def create_profile(profile_dict):
-        """
-        based on :profile_fict
-        :returns Canvas profile or TypeError
-        """
-        try:
-            profile = Profile(**profile_dict)
-        except TypeError as e:
-            logger.error(f"attribute needs to be added to Profile class: {e}")
-            raise
-        return profile
-
-    def get_user_profile_id(self, user_id: int):
-        user = self.get_user(user_id)
-        profile = self.create_profile(user.get_profile())
-        return user, profile
-
-    def get_user_profile_anr(self, anr):
-        user = self.canvas.get_user(anr, 'sis_user_id')
-        profile = self.create_profile(user.get_profile())
-        return user, profile
-
-    def is_teacher_canvas(self, user):
-        """":param user """
-        role_teacher = ENROLLMENT_TYPES['teacher']
-        # check if param: user is teacher in one of the TST courses
-        for course in self.admin.get_courses():
-            enrollments = course.get_enrollments()
-            for enrollment in enrollments:
-                if enrollment.role == role_teacher and enrollment.user == user:
-                    return True
-        return False
-
-    def is_teacher_db(self, user):
-        """":param user"""
-        return user.id in self.teacher_ids
-
-    def show_modules(self, course_id):
-        course = self.get_course(course_id)
-        modules = course.get_modules()
-        # print(dir(modules))
-        for page in modules:
-            print(dir(page))
-            print("page:{}".format(page))
-            module_items = page.get_module_items()
-            print("page module_items:{}".format(module_items))
-            for item in module_items:
-                print(item.c)
-            # print("There are {} modules in page".format(len(page)))
-        return
-
     def course_metadata(self, course_id, ignore_assignment_names=None):
         """
         return dict with metadata of this course
@@ -467,42 +401,6 @@ class CanvasRobot(object):
         md_result = course_metadata_memcached(course_id, self.canvas,
                                               frozenset(ignore_assignment_names))
         return md_result
-
-    def enroll_in_course(self,
-                         search: str,  # todo: change name
-                         course_id: int,
-                         username,
-                         enrollment_type: str) -> str:
-        """
-        :param search: if given get course using osiris_id
-        :param course_id: course_id
-        :param username:
-        :param enrollment_type:
-        :returns: result of course enrollment as a str...
-        """
-        if search:
-            try:
-                course = self.get_course_using_osiris_id(search)
-            except canvasapi.exceptions.ResourceDoesNotExist:
-                return f"Course {search} not found in Canvas"
-        else:
-            course = self.get_course(course_id)
-
-        user = self.search_user(username)
-        if not user:
-            # search_user / get_user fails to find a newly imported account
-            # work around it by using enroll_user
-            try:
-                course.enroll_user(f"sis_login_id:{username}", enrollment_type)
-            except Exception as e:
-                return f"Failed with {e} while using special syntax for sys_login_id"
-            return f"Enrolled {user} in {course} as {enrollment_type}"
-
-        try:
-            course.enroll_user(user, enrollment_type)
-        except Exception as e:
-            return f"Enroll of {user} in {course} as {enrollment_type} failed:{e}"
-        return f"Enrolled {user} in {course} as {enrollment_type}"
 
     def get_all_active_courses(self, from_db=True):
         """:returns list of all canvas courses for this subadmin account"""
@@ -543,6 +441,122 @@ class CanvasRobot(object):
             return rows[0].course_id
         return 0
 
+    # COURSE PARTS: Modules, Pages
+    def show_modules(self, course_id):
+        course = self.get_course(course_id)
+        modules = course.get_modules()
+        # print(dir(modules))
+        for page in modules:
+            print(dir(page))
+            print("page:{}".format(page))
+            module_items = page.get_module_items()
+            print("page module_items:{}".format(module_items))
+            for item in module_items:
+                print(item.c)
+            # print("There are {} modules in page".format(len(page)))
+        return
+
+    def course_get_pages(self, course_id):
+        """
+        :param course_id
+        :returns all all pages"""
+        course = self.canvas.get_course(course_id)
+        pages = course.get_pages(include=['body'])
+        pages = filter(lambda p: p.title[0:3] != 'UVT', pages)  # skip
+        return pages
+
+    # USER, ROLES and PROFILE ----------------------------------------
+    def get_user(self, user_id: int):
+        """
+        get user using
+        :param user_id:
+        :returns user
+        """
+        return self.canvas.get_user(user_id)
+
+    @staticmethod
+    def create_profile(profile_dict):
+        """
+        based on :profile_dict
+        :returns Canvas profile or TypeError
+        """
+        try:
+            profile = Profile(**profile_dict)
+        except TypeError as e:
+            logger.error(f"attribute needs to be added to Profile class: {e}")
+            raise
+        return profile
+
+    def get_user_profile_id(self, user_id: int):
+        user = self.get_user(user_id)
+        profile = self.create_profile(user.get_profile())
+        return user, profile
+
+    def get_user_profile_anr(self, anr):
+        user = self.canvas.get_user(anr, 'sis_user_id')
+        profile = self.create_profile(user.get_profile())
+        return user, profile
+
+    def is_teacher_canvas(self, user):
+        """":param user """
+        role_teacher = ENROLLMENT_TYPES['teacher']
+        # check if param: user is teacher in one of the TST courses
+        for course in self.admin.get_courses():
+            enrollments = course.get_enrollments()
+            for enrollment in enrollments:
+                if enrollment.role == role_teacher and enrollment.user == user:
+                    return True
+        return False
+
+    def is_teacher_db(self, user):
+        """":param user"""
+        return user.id in self.teacher_ids
+
+    def lookup_teachers_db(self):
+        db = self.db
+        teachers = db((db.course2user.role == 'T') &
+                      (db.course2user.user == db.user.id)).select(db.user.user_id,
+                                                                  distinct=True)
+        teacher_ids = [teacher.user_id for teacher in teachers]
+        return teacher_ids
+
+    # COURSE-USER interactions
+    def enroll_in_course(self,
+                         search: str,  # todo: change name
+                         course_id: int,
+                         username,
+                         enrollment_type: str) -> str:
+        """
+        :param search: if given get course using osiris_id
+        :param course_id: course_id
+        :param username:
+        :param enrollment_type:
+        :returns: result of course enrollment as a str...
+        """
+        if search:
+            try:
+                course = self.get_course_using_osiris_id(search)
+            except canvasapi.exceptions.ResourceDoesNotExist:
+                return f"Course {search} not found in Canvas"
+        else:
+            course = self.get_course(course_id)
+
+        user = self.search_user(username)
+        if not user:
+            # search_user / get_user fails to find a newly imported account
+            # work around it by using enroll_user
+            try:
+                course.enroll_user(f"sis_login_id:{username}", enrollment_type)
+            except Exception as e:
+                return f"Failed with {e} while using special syntax for sys_login_id"
+            return f"Enrolled {user} in {course} as {enrollment_type}"
+
+        try:
+            course.enroll_user(user, enrollment_type)
+        except Exception as e:
+            return f"Enroll of {user} in {course} as {enrollment_type} failed:{e}"
+        return f"Enrolled {user} in {course} as {enrollment_type}"
+
     def search_user(self, search_name: str, email: str = ""):
         """
         :param search_name:
@@ -569,6 +583,7 @@ class CanvasRobot(object):
                 return False  # give up
         return user
 
+    # interact with EXTERNAL systems
     @staticmethod
     def get_students_dibsa(c_name):
         """get list of students from (local) DIBSA CRM"""
@@ -708,7 +723,6 @@ class CanvasRobot(object):
 
         return removed
 
-    # noinspection PyCallingNonCallable
     def import_courses(self, filename):
         """from csv file updates table Course and Teacher
         :param filename: filename csv file
@@ -868,7 +882,7 @@ class CanvasRobot(object):
 
     def report_studentcounts(self):
         """ for all courses: get coursename and student count
-        :return: list of dicts, keys fname, count"""
+        :return: list of dicts, with keys coursename, count"""
         # join bbcourses with users
         db = self.db  # cosmetic reasons
         count = db.bbuser.id.count()
@@ -1007,27 +1021,55 @@ class CanvasRobot(object):
         db.commit()
         return counters
 
-    def search_replace_in_page(self, page, source, target, dryrun=False):
+    # transformation functions
+    def search_replace_in_page(self,
+                               page,
+                               source: str,
+                               target: str,
+                               dryrun=False) -> Tuple[count: int,
+                                                      new_body:str]:
+        """
+        :param page: Canvas page object to be updated
+        :param source: text to search
+        :param target: text to replace with
+        :param dryrun: no updates, only return marked body if True
+        :returns: count, new_body tuple
+        """
         if dryrun:
-            new_body, count = re.subn(source, '>'+source+'<', page.body)
+            new_body, count = re.subn(source, '>'+source.strip()+'<', page.body)
         else:
             new_body, count = re.subn(source, target, page.body)
-            # update page
+            # update page in canvas
             page.edit(wiki_page=dict(body=new_body))
             new_body = ""
         return count, new_body
 
-    def course_search_replace_pages(self, course_id, source, target, dryrun=False):
-        """In a course replace text or html in all pages"""
+    def course_search_replace_pages(self,
+                                    course_id: int,
+                                    source: str,
+                                    target: str,
+                                    dryrun=False) -> Tuple[int, str]:
+        """
+        In a course replace text (or html) in all pages
+        :param course_id: canvas course_id
+        :param source: text te find
+        :param target: text to replace with
+        :param dryrun: True: don't update just return marked body
+        :return:
+        """
         total_count = 0
-        course = canvas.get_course(course_id)
+        marked_bodies = ""
+        course = self.canvas.get_course(course_id)
         pages = course.get_pages(include=['body'])
         pages = filter(lambda p: p.title[0:3] != 'UVT', pages)  # skip
         for page in pages:
             if source in page.body:
-                count, _ = search_replace_in_page(page, source, target, dryrun)
+                count, new_body = search_replace_in_page(page, source, target, dryrun)
                 total_count += count
-        return total_count
+                if dryrun:
+                    marked_bodies += new_body
+
+        return total_count, marked_bodies
 
     def get_examinations_from_database(self,
                                        single_course=None,
