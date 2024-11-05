@@ -1,3 +1,4 @@
+import sys
 from typing import Tuple, Optional, Union, Callable
 import io
 import json
@@ -1024,21 +1025,20 @@ class CanvasRobot(object):
     # transformation functions
     def search_replace_in_page(self,
                                page,
-                               source: str,
-                               target: str,
-                               dryrun=False) -> Tuple[count: int,
-                                                      new_body:str]:
+                               search_text: str,
+                               replace_text: str,
+                               dryrun=False) -> Tuple[int, str]:
         """
         :param page: Canvas page object to be updated
-        :param source: text to search
-        :param target: text to replace with
+        :param search_text: text to search
+        :param replace_text: text to replace with
         :param dryrun: no updates, only return marked body if True
         :returns: count, new_body tuple
         """
         if dryrun:
-            new_body, count = re.subn(source, '>'+source.strip()+'<', page.body)
+            new_body, count = re.subn(search_text, ' <span style="color: red;">' + search_text + '</span>', page.body)
         else:
-            new_body, count = re.subn(source, target, page.body)
+            new_body, count = re.subn(search_text, replace_text, page.body)
             # update page in canvas
             page.edit(wiki_page=dict(body=new_body))
             new_body = ""

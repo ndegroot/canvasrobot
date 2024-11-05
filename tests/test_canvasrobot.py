@@ -1,6 +1,7 @@
 import mock
 import builtins
 import pytest
+import webview
 from canvasrobot.canvasrobot import Course2Foldername
 
 """
@@ -130,20 +131,21 @@ def test_search_replace(cr):
     db = cr.db
     course = cr.get_course(TEST_COURSE)
     pages = course.get_pages(include=['body'])
-    source, target = ' je', ' u'
+    search_text, replace_text = ' je', ' u'
     page_found_url = ""
+    dryrun = True
     for page in pages:
-        if source in page.body:
-            page_found_url = page.url
-            result = cr.search_replace_in_page(page, source, target, dryrun=True)
+        if search_text in page.body:
+            page_found_url = page.url  # remember
+            cr.search_replace_in_page(page, search_text, replace_text, dryrun=dryrun)
             # We only need one page to test this
             break
+
     if page_found_url:
-        # read from canvas instance
-        page = course.get_page(page_found_url)
-        assert source not in page.body
-        assert target in page.body
+        if not dryrun:
+            # read again from canvas instance to check
+            page = course.get_page(page_found_url)
+            assert search_text not in page.body
+            assert replace_text in page.body
     else:
-        assert False, f"Source string '{source}' not found in any page of course {TEST_COURSE}"
-
-
+        assert False, f"Source string '{search_text}' not found in any page of course {TEST_COURSE}"

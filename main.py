@@ -1,6 +1,8 @@
 import logging
-import rich
+import sys
 
+import rich
+import webview
 import canvasrobot as cr
 
 logger = logging.getLogger("canvasrobot.canvasrobot")
@@ -18,6 +20,75 @@ logger.addHandler(stream_handler)
 
 logger.info(f"{__name__} started")
 
+TEST_COURSE = 34  # first create this test course in Canvas
+
+
+def search_replace_show(cr):
+    """check course_search_replace function dryrun, show"""
+    # db = cr.db
+    course = cr.get_course(TEST_COURSE)
+    pages = course.get_pages(include=['body'])
+    search_text, replace_text = ' je', ' u'
+    page_found_url = ""
+    dryrun = True
+    for page in pages:
+        if search_text in page.body:
+            page_found_url = page.url  # remember
+            count, html = cr.search_replace_in_page(page, search_text, replace_text, dryrun=dryrun)
+            # We only need one page to test this
+            if dryrun:
+                show_search_result(count, html)
+            break
+
+    if page_found_url:
+        if not dryrun:
+            # read again from canvas instance to check
+            page = course.get_page(page_found_url)
+            assert search_text not in page.body
+            assert replace_text in page.body
+    else:
+        assert False, f"Source string '{search_text}' not found in any page of course {TEST_COURSE}"
+
+
+def show_search_result(count: int, html: str):
+
+    template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Zoekresultaat</title>
+    </head>
+    <body>
+      <p>In <span style='color: red;' >red</span> below the {} found locations</p>
+      <button onclick='pywebview.api.close()'>Klaar?</button>
+      <hr/>
+      {}  
+    </body>
+    </html>
+    """
+
+    added_button = template.format(count, html)
+
+    class Api:
+        _window = None
+
+        def set_window(self, window):
+            self._window = window
+
+        def close(self):
+            self._window.destroy()
+            self._window = None
+
+            sys.exit(0)  # needed to prevent hang
+            # return count, new_body
+
+    api = Api()
+    win = webview.create_window(title="Preview (click button to close)",
+                                html=added_button,
+                                js_api=api)
+    api.set_window(win)
+    webview.start()
+
 
 if __name__ == '__main__':
 
@@ -28,11 +99,14 @@ if __name__ == '__main__':
     # todo: make ud db periodic
     # 2024-08-28
     # robot.update_database_from_canvas()
-    robot.enroll_students_in_communities()
+    # next line used in aug/okt 2024
+    # robot.enroll_students_in_communities()
 
+    search_replace_show(robot)  # calls webview
+    # del webview
     # robot.get_all_active_tst_courses(from_db=False)
     # result = robot.enroll_in_course("", 4472, 'u752058',
-    # 'StudentEnrollment') #  (enrollment={'type': 'StudentEnrollment'}
+    # 'StudentEnrollment') #  (enrollment={}
     # user = robot.search_user('u752058')
     # print(user)
     # if not user:
