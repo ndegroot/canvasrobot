@@ -71,46 +71,47 @@ class CanvasConfig:
                 pass
 
 
-ENROLLMENT_TYPES = {'student': 'StudentEnrollment',
-                    'teacher': 'TeacherEnrollment',
-                    'ta': 'TaEnrollment',
-                    'observer': 'ObserverEnrollment',
-                    'designer': 'DesignerEnrollment'}
 # School specific
 EDUCATIONS = ('BANL',
               'BAUK',
               'MA',
-              'PM-MA',
+              'PM_MA',
               'ULO',
-              'PM-ULO',
+              'PM_ULO',
               'MACS',
-              'PM-MACS',
+              'PM_MACS',
               'GV',
-              'PM-GV',
+              'PM_GV',
               'BIJVAK'
               )
 
-COMMUNITY_EDU_IDS = {'banl': ['banl', 'pm-ma', 'pm-ulo', 'pm-gv'],  # nl
-                     'bauk': ['bauk', 'pm-macs'],  # uk
-                     'ma': ['ma'],
-                     'gv': ['gv'],
-                     'ulo': ['ulo'],
+# communities can have multiple educations
+COMMUNITY_EDU_IDS = {'banl': ['banl', 'pm_ma', 'pm_ulo', 'pm_gv'],  # nl
+                     'bauk': ['bauk', 'pm_macs'],  # uk
                      'macs': ['macs'],
+                     'ma': ['ma', 'gv', 'ulo'],
                      'acskills': [edu.lower() for edu in EDUCATIONS]
                      }
 
-# the 'communities-courses'
-
-
+# the 'communities-courses' which can have sections
 COMMUNITIES = dict(
-    acskills=4485,
-    theoonline=4472,
-    banl=4221,
-    bauk=4227,
-    ma=4228,
-    ulo=4229,
-    macs=4230,
-    gv=16066)
+    acskills=(4485, None),
+    theoonline=(4472, None),
+    banl=(4221, dict(
+          banl=7609,
+          pm_ma=117497,
+          pm_ulo=117499,
+          pm_gv=117498)),
+    bauk=(4227, dict(
+        bauk=7618,
+        pm_macs=117501)),
+    macs=(4230, None),
+    ma=(4228, dict(
+        ma=7619,
+        gv=117490,
+        ulo=117491))
+    )
+
 
 SHORTNAMES = dict(
     bho1=4285,
@@ -164,6 +165,13 @@ class LocalDAL(DAL):
                                        migrate_enabled=True,
                                        fake_migrate=False,
                                        fake_migrate_all=fake_migrate_all)
+
+        self.define_table('setting',
+                          Field('last_db_update', 'datetime'),
+                          singular='Canvasrobot setting',
+                          plural='CanvasRobot settings',
+                          migrate=True)
+
         self.define_table('course',
                           Field('course_id', 'integer'),
                           Field('course_code', 'string'),

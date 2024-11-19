@@ -1,4 +1,4 @@
-from .canvasrobot import CanvasRobot, LocalDAL,ENROLLMENT_TYPES, \
+from .canvasrobot import CanvasRobot, LocalDAL, \
     EDUCATIONS, COMMUNITIES
 from .canvasrobot_model import STUDADMIN, SHORTNAMES, Field
 __all__ = ["CanvasRobot", "LocalDAL", "Field", "ENROLLMENT_TYPES", "EDUCATIONS", "COMMUNITIES",

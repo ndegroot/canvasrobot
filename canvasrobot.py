@@ -96,13 +96,18 @@ if __name__ == '__main__':
 
     robot = cr.CanvasRobot(reset_api_keys=False,
                            console=console)
-    # todo: make ud db periodic
-    # 2024-08-28
-    # robot.update_database_from_canvas()
-    # next line used in aug/okt 2024
+
+    robot.update_database_from_canvas(max_number=900)
+    # result = robot.get_students_dibsa('PM_MACS', local=False)
+    result = robot.search_user('u144466', 'A.J.D.Hendriks@tilburguniversity.edu')
+    result2 = robot.enroll_in_course(search="", course_id=4230, username='u144466')
+    robot.report_errors()
+    # students_dict = robot.get_students_for_community("bauk",
+    #                                                local=False)
     # robot.enroll_students_in_communities()
 
-    search_replace_show(robot)  # calls webview
+    # search_replace_show(robot)  # calls webview
+
     # del webview
     # robot.get_all_active_tst_courses(from_db=False)
     # result = robot.enroll_in_course("", 4472, 'u752058',

@@ -6,10 +6,12 @@ import mimetypes
 import os
 import re
 from collections import namedtuple
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import pytz
 import logging
 import binascii
 
+from result import Ok, Err, Result, is_ok, is_err
 import attrs
 from attrs import define, asdict
 import canvasapi  # type: ignore
@@ -27,6 +29,7 @@ except ImportError:
     MEMCACHED = False
 #  from rich.logging import RichHandler
 from rich.progress import track
+from rich.progress import Progress
 # from rich.console import Console
 from canvasapi.course import Course  # type: ignore
 from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment  # type: ignore
@@ -35,7 +38,7 @@ from openpyxl.utils import get_column_letter  # type: ignore
 from openpyxl.workbook import Workbook  # type: ignore
 from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder
 from socket import gaierror, timeout
-from .canvasrobot_model import (AC_YEAR, NEXT_YEAR, ENROLLMENT_TYPES,  # type: ignore
+from .canvasrobot_model import (AC_YEAR, NEXT_YEAR,  # type: ignore
                                 EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig,
                                 EXAMINATION_FOLDER, COMMUNITY_EDU_IDS)  # type: ignore
 from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, \
@@ -282,6 +285,7 @@ class CanvasRobot(object):
                  msg_queue=None,
                  console=None,  # optional Rich console
                  gui_root=None,  # optional Tkinter root
+                 is_debug: bool = False,
                  is_testing: bool = False,
                  db_folder: str = "",
                  fake_migrate_all: bool = False):
@@ -290,6 +294,7 @@ class CanvasRobot(object):
         self.queue = msg_queue  # for async use in tkinter
         self.console = console  # for commandline use
         self.gui_root = gui_root  # tkinter root
+        self.is_debug = is_debug
 
         db_folder = db_folder or os.path.join(os.getcwd(), 'databases')
         self.db = LocalDAL(is_testing=is_testing,
@@ -313,6 +318,20 @@ class CanvasRobot(object):
                 else None
         except (canvasapi.exceptions.Forbidden, ConnectionError, Exception):
             self.admin = None
+
+        db = self.db
+        row = db(db.setting.id == 1).select().first()
+        self.last_db_update = row.last_db_update if row else datetime(1, 1, 1,
+                                                                      tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        utc_timezone = pytz.timezone('UTC')
+        try:
+            delta = now - utc_timezone.localize(self.last_db_update)
+        except (TypeError, Exception):
+            pass
+        else:
+            if delta.days > 3:
+                self.update_database_from_canvas()
 
         self.teacher_ids = self.lookup_teachers_db()
 
@@ -339,9 +358,16 @@ class CanvasRobot(object):
 
     def print(self, txt):
         if self.console:
-            self.console(txt)
+            self.console.out(txt)
         else:
             print(txt)
+
+    def report_errors(self):
+        report = self.errors or "no errors recorded"
+        if self.console:
+            self.console.out(report)
+        else:
+            print(report)
 
     def print_outliner_foldernames(self) -> str:
         output = ""
@@ -353,10 +379,12 @@ class CanvasRobot(object):
         return output
 
     def add_message(self, msg, value):
+        # if gui (tkinter) send msg to queue
         if self.queue:
             self.queue.put((msg, value))
         if self.console:
-            self.console.print(f"{msg}:{value=}" if value else msg)
+            if self.is_debug:
+                self.console.print(f"{msg}:{value=}" if value else msg)
 
     # COURSES----------------------------------------
     def get_course(self, course_id: int):
@@ -365,17 +393,19 @@ class CanvasRobot(object):
         :returns canvas course by its id"""
         return self.canvas.get_course(course_id)
 
-    def get_courses(self, enrollment_type: str = "teacher"):
+    def get_courses(self, enrollment: dict):
         """"
-        :param enrollment_type 'teacher'(default), 'student','ta', 'observer' 'designer'
+        :param enrollment 'teacher'(default), 'student','ta', 'observer' 'designer'
         :returns canvas courses for current user in role"""
-        return self.canvas.get_courses(enrollment_type=enrollment_type)
+        enrollment = enrollment or {'type': 'TeacherEnrollment'}
+        return self.canvas.get_courses(enrollment=enrollment)
 
     def get_courses_in_account(self,
                                by_teachers: Optional[list] = None,
                                this_year=True):
         """
-        get all courses in account here use_is has the role/type [enrollment_type]
+        get all courses from canvas in account.
+
         :param by_teachers: list of teacher id's
         :param this_year: True=filter courses to include only the current year
         :returns list of courses
@@ -499,9 +529,12 @@ class CanvasRobot(object):
         return user, profile
 
     def is_teacher_canvas(self, user):
-        """":param user """
-        role_teacher = ENROLLMENT_TYPES['teacher']
-        # check if param: user is teacher in one of the TST courses
+        """
+        check if user is a teacher in one of the TST courses by checking
+        the canvas courses.
+        :param user
+        """
+        role_teacher = {'type': 'TeacherEnrollment'}
         for course in self.admin.get_courses():
             enrollments = course.get_enrollments()
             for enrollment in enrollments:
@@ -509,8 +542,11 @@ class CanvasRobot(object):
                     return True
         return False
 
+    # get from DB
     def is_teacher_db(self, user):
-        """":param user"""
+        """" check if user is teacher in one of the TST courses by checking
+        the database
+        :param user"""
         return user.id in self.teacher_ids
 
     def lookup_teachers_db(self):
@@ -522,41 +558,6 @@ class CanvasRobot(object):
         return teacher_ids
 
     # COURSE-USER interactions
-    def enroll_in_course(self,
-                         search: str,  # todo: change name
-                         course_id: int,
-                         username,
-                         enrollment_type: str) -> str:
-        """
-        :param search: if given get course using osiris_id
-        :param course_id: course_id
-        :param username:
-        :param enrollment_type:
-        :returns: result of course enrollment as a str...
-        """
-        if search:
-            try:
-                course = self.get_course_using_osiris_id(search)
-            except canvasapi.exceptions.ResourceDoesNotExist:
-                return f"Course {search} not found in Canvas"
-        else:
-            course = self.get_course(course_id)
-
-        user = self.search_user(username)
-        if not user:
-            # search_user / get_user fails to find a newly imported account
-            # work around it by using enroll_user
-            try:
-                course.enroll_user(f"sis_login_id:{username}", enrollment_type)
-            except Exception as e:
-                return f"Failed with {e} while using special syntax for sys_login_id"
-            return f"Enrolled {user} in {course} as {enrollment_type}"
-
-        try:
-            course.enroll_user(user, enrollment_type)
-        except Exception as e:
-            return f"Enroll of {user} in {course} as {enrollment_type} failed:{e}"
-        return f"Enrolled {user} in {course} as {enrollment_type}"
 
     def search_user(self, search_name: str, email: str = ""):
         """
@@ -567,29 +568,30 @@ class CanvasRobot(object):
         try:
             user = self.canvas.get_user(search_name, 'sis_login_id')
         except (canvasapi.exceptions.Unauthorized,
-                canvasapi.exceptions.ResourceDoesNotExist):
+                canvasapi.exceptions.ResourceDoesNotExist) as e:
             if not email:
                 # out of options
-                self.errors.append(f'Unable to lookup {search_name} '
+                self.errors.append(f'{e} And unable to lookup {search_name} '
                                    f'using email, parameter not provided')
                 return False
             try:
                 user = self.canvas.get_user(email, 'email')
             except canvasapi.exceptions.ResourceDoesNotExist:
-                self.errors.append(f'Unable to lookup {search_name} using email')
+                self.errors.append(f'{search_name} not found, {email} not found.')
                 return False  # give up
             except canvasapi.exceptions.Unauthorized:
-                self.errors.append(f"User {search_name} "
+                self.errors.append(f"Using {search_name} "
                                    f"not (allowed to be) found by email in Canvas")
                 return False  # give up
         return user
 
     # interact with EXTERNAL systems
     @staticmethod
-    def get_students_dibsa(c_name):
+    def get_students_dibsa(c_name, local=True):
         """get list of students from (local) DIBSA CRM"""
         # idea:  use LDAP instead
-        url = f'http://127.0.0.1:8000/dibsa/service/call/json/students/{c_name}'
+        url = (f"{'http://127.0.0.1:8000' if local else 'https://webapp.fkt.uvt.nl/'}"
+               f"/dibsa/service/call/json/students/{c_name}")
         try:
             r = requests.get(url)
         except requests.exceptions.ConnectionError:
@@ -608,41 +610,54 @@ class CanvasRobot(object):
 
         return json_result
 
-    def get_students_for_community(self, c_id):
+    def get_students_for_community(self, c_id, local=False):
         """given
+        :param local: get student dat from local Dibsa if True
         :param c_id community id
+        lookup the list of educations (at least one item)
         retrieve the students from local dibsa/ldap
-        :returns list of Canvas students"""
+        for each student lookup canvas user and build list of canvas
+        user (student)
+        :returns dict  with as key the edu_id list of Canvas students"""
 
         community_edu_ids = COMMUNITY_EDU_IDS
-        # edu_ids = [edu.lower() for edu in EDUCATIONS]
-        # if c_id == 'acskills' else  if c_id == 'banl' else [c_id]
-        edu_ids = community_edu_ids[c_id]
-        students_dibsa = []
-        students_canvas = []
+        edu_ids = community_edu_ids[c_id]  # list of 1 or more items
+        students_dibsa = {}
         for edu_id in edu_ids:
             try:
-                students_dibsa += self.get_students_dibsa(edu_id.upper())
+                students_dibsa[edu_id] = self.get_students_dibsa(edu_id.upper(),
+                                                                 local=local)
             except DibsaRetrieveError as e:
                 msg = f"Unable to retrieve students for {edu_id}"
                 logger.error(e)
                 raise DibsaRetrieveError(msg)
-            if isinstance(students_dibsa, str):
-                msg = f"Unable to retrieve students for {edu_id}"
+            if isinstance(students_dibsa, str) or hasattr(students_dibsa, "msg"):
+                msg = students_dibsa["msg"] if hasattr(students_dibsa, "msg") \
+                    else f"Unable to retrieve students for {edu_id}"
                 logger.error(msg)
                 raise DibsaRetrieveError(msg)
-        for student in students_dibsa:
-            try:
-                username = student['username']
-            except TypeError as e:
-                logger.error(e)
-                continue
 
-            user = self.search_user(username)
-            if not user:
-                continue
-            students_canvas.append(user)
+        students_canvas = {}
+        for edu_id, students in students_dibsa.items():
+            tmp_students = []
+            first_enroll = []
+            for student in students:
+                try:
+                    username = student['username']
+                except TypeError as e:
+                    logger.error(e)
+                    self.errors.append(e)
+                    continue
 
+                user = self.search_user(username)
+                if not user:
+                    self.errors.append(f"{username} not found in Canvas,")
+                    # todo: cn be reared by adding student to a or the course
+                    first_enroll.append(user)
+                    continue
+                tmp_students.append(user)
+            students_canvas[edu_id] = tmp_students, first_enroll
+        # return a dict with the ed_id as key(s) and a list of studenten as values
         return students_canvas
 
     def get_community(self, c_id):
@@ -658,7 +673,80 @@ class CanvasRobot(object):
 
         return course
 
+    def enroll_in_course(self,
+                         search: str = "",
+                         course_id: int = 0,
+                         section_id: int = 0,
+                         username: str = "",
+                         enrollment=None) -> Result[User, str]:
+        """
+        search course on osiris_id with enroll using username (more robust,
+        using osiris_id if needed)
+
+        :param search: if given get course using osiris_id
+        :param course_id: course_id
+        :param section_id: enroll in section if provided
+        :param username:
+        :param enrollment:
+        enrollment={'type': 'StudentEnrollment'}
+        :returns: result of course enrollment as a str...
+        """
+        if enrollment is None:
+            enrollment = dict(type="StudentEnrollment")
+        if search:
+            try:
+                course = self.get_course_using_osiris_id(search)
+            except canvasapi.exceptions.ResourceDoesNotExist:
+                return Err(f"Course {search} not found in Canvas")
+        else:
+            course = self.get_course(course_id)
+
+        section = None
+        if section_id:
+            section = course.get_section(section_id)
+
+        enrollment = enrollment or {'type': 'StudentEnrollment'}
+
+        user = self.search_user(username)
+        if not user:
+            # search_user / get_user fails to find a newly imported account
+            # work around it by using enroll_user
+            try:
+                if section:
+                    section.enroll_user(f"sis_login_id:{username}", enrollment)
+                else:
+                    course.enroll_user(f"sis_login_id:{username}", enrollment)
+            except Exception as e:
+                msg = f"Failed with {e} while using special syntax for sys_login_id"
+                self.errors.append(msg)
+                return Err(msg)
+            else:
+                msg = f"Enrolled {username} in {course} as {enrollment}"
+                self.actions.append(msg)
+                return Ok(user)
+
+        # user is found normally
+        try:
+            if section:
+                section.enroll_user(user, enrollment=enrollment)
+            else:
+                course.enroll_user(user, enrollment=enrollment)
+        except Exception as e:
+            msg = f"Enroll of {user} in {course} as {enrollment} failed:{e}"
+            self.errors.append(msg)
+            return Err(msg)
+        msg = f"Enrolled {user} in {course} as {enrollment}"
+        self.actions.append(msg)
+        return Ok(user)
+
     def enroll_user_in_course(self, user, course, role):
+        """
+        enroll (valid) user in course with role
+        :param user:
+        :param course:
+        :param role:
+        :return:
+        """
         try:
             course.enroll_user(user, role)
         except (canvasapi.exceptions.BadRequest,
@@ -668,19 +756,60 @@ class CanvasRobot(object):
             self.actions.append(f"{user.name} added to {course.name} as {role}")
         return
 
-    def enroll_students_in_communities(self):
+    def enroll_user_in_course_section(self, user, course, section_id, role):
+        section = course.get_section(section_id)
+        """
+        enroll (valid) user in section of course with role
+        :param user:
+        :param course:
+        :section_id:
+        """
+        try:
+            section.enroll_user(user)
+        except (canvasapi.exceptions.BadRequest,
+                canvasapi.exceptions.Conflict) as e:
+            self.errors.append(f'User {user.name} not added to {course.name} in section{section.name}: {e}')
+        else:
+            self.actions.append(f"{user.name} added to {course.name} in section {section.name} as {role}")
+        return
+
+    def enroll_students_in_communities(self, local=False):
         """for each community
-        retrieve the students from local dibsa/ldap
+        retrieve the students from local or central dibsa(ldap)
         and enroll them"""
 
         community_edu_ids = COMMUNITY_EDU_IDS
         for c_id in community_edu_ids:
-            # cleanup
-            students = self.get_students_for_community(c_id)
-            for student in students:
-                course = self.get_course(COMMUNITIES[c_id])
-                role_student = ENROLLMENT_TYPES['student']
-                self.enroll_user_in_course(student, course, role=role_student)
+            # for each community course
+            # if c_id != "bauk":
+            #    continue
+            combi_dict = self.get_students_for_community(c_id,
+                                                         local=local)
+            course_id, lookup_sections = COMMUNITIES[c_id]
+            course = self.get_course(course_id)
+            role_student = {'type': 'StudentEnrollment'}
+            # first handle the sis_login_ids
+            for edu, combi in combi_dict.items():
+                _, usernames = combi
+                for username in usernames:  # students
+
+                    if lookup_sections and edu in lookup_sections:
+                        section = lookup_sections[edu]
+                        section.enroll_user(f"sis_login_id:{username}")
+                    else:
+                        course.enroll_user(f"sis_login_id:{username}",
+                                           dict(type="StudentEnrollment"))
+
+                        # self.enroll_user_in_course(student, course, role=role_student)
+
+            for edu, combi in students_dict.items():
+                students, _ = combi
+                for student in students:
+                    if lookup_sections and edu in lookup_sections:
+                        section = lookup_sections[edu]
+                        self.enroll_user_in_course_section(student, course, section, role=role_student)
+                    else:
+                        self.enroll_user_in_course(student, course, role=role_student)
 
     def add_observer_to_education(self, user, report_only=False):
         """ add user as an observer to all courses of an education"""
@@ -695,7 +824,7 @@ class CanvasRobot(object):
             # only insert/update course if current year
             if str(course.sis_course_id)[:4] != str(self.year):
                 continue
-            observers = course.get_users(enrollment_type="observer")
+            observers = course.get_users(enrollment={'type': 'ObserverEnrollment'})
             for observer in observers:
                 if not hasattr(observer, 'login_id'):
                     continue
@@ -1154,6 +1283,127 @@ class CanvasRobot(object):
         db(qry).update(**ud_fields)
         db.commit()
 
+    def update_db_for(self, course, single_course=None):
+
+        def count_students(course):
+            # students
+            students = course.get_users(enrollment={'type': 'StudentEnrollment'})
+            # remove student with name=='Test Student'
+            nr_students = len(list(filter(lambda s: s.name != 'Test student',
+                                          list(students))))
+            return nr_students
+        db = self.db
+        logger.debug("course: {}".format(course.name))
+        # students
+        nr_students = count_students(course)
+        # ud teachers
+        teacher_logins, teacher_names, teachers_ids = self.update_db_teachers(course)
+
+        format_str = "%Y-%m-%dT%H:%M:%SZ"
+        creation_date = datetime.strptime(course.created_at, format_str)
+        ignore_examinations = (
+            self.get_examinations_from_database(single_course=single_course))
+        # filter: we need only our course.id with candidate False
+        ignore_examination_names = [row.name for row in ignore_examinations
+                                    if (row.course == course.id and row.ignore)]
+
+        md = self.course_metadata(course.id, frozenset(ignore_examination_names))
+
+        course_id = self.update_db_course(course, creation_date, md, nr_students, teacher_logins, teacher_names)
+
+        if course_id:  # a new course has been inserted in the db
+            db(db.course.id == course_id).update(status=2)
+        else:
+            course_id = db(db.course.course_id == course.id).select().first().id
+
+        for item in md.examination_records:
+            # candidate is True if course_name in examination_list else False
+            _ = db.examination.update_or_insert((db.examination.course ==
+                                                 item.course_id) &
+                                                (db.examination.name == item.name),
+                                                course=course_id,
+                                                course_name=item.course_name,
+                                                name=item.name
+                                                )
+        for user_id in teachers_ids:
+            db.course2user.update_or_insert((db.course2user.course == course_id) &
+                                            (db.course2user.user == user_id),
+                                            course=course_id,
+                                            user=user_id,
+                                            role='T')
+
+        db.commit()
+
+    def update_db_course(self, course, creation_date, md, nr_students, teacher_logins, teacher_names):
+        # update table course
+        db = self.db
+        # course_id = None
+        try:
+            course_id = db.course.update_or_insert(db.course.course_id == course.id,
+                                                   course_id=course.id,
+                                                   # status=course.workflow_state,
+                                                   course_code=course.course_code,
+                                                   sis_code=course.sis_course_id,
+                                                   # year course_code and suffixes
+                                                   name=course.name,
+                                                   creation_date=creation_date,
+                                                   ac_year=self.year,
+                                                   nr_students=nr_students,
+                                                   nr_modules=md.nr_modules,
+                                                   nr_module_items=md.nr_module_items,
+                                                   nr_pages=md.nr_pages,
+                                                   nr_assignments=md.nr_assignments,
+                                                   nr_quizzes=md.nr_quizzes,
+                                                   assignments_summary=md.assignments_summary,
+                                                   examinations_summary=md.examinations_summary,
+                                                   teachers=teacher_logins,
+                                                   teachers_names=teacher_names)
+            db.commit()  # really needed here??
+        except Exception as e:
+            err = f"{e} error inserting {course.name}"
+            self.add_message("<InsertError>", err)
+            logger.exception(err)
+            raise
+        return course_id
+
+    def update_db_teachers(self, course):
+        db = self.db
+        teachers = course.get_users(enrollment={'type': 'TeacherEnrollment'})
+        teachers_ids = []
+        for teacher in teachers:
+            if not hasattr(teacher, 'login_id'):
+                continue
+            # print(teacher.name)
+            first_name, last_name, prefix = self.parse_sortable_name(teacher)
+            inserted_id = db.user.update_or_insert(db.user.username ==
+                                                   teacher.login_id,
+                                                   user_id=teacher.id,
+                                                   name=teacher.name,
+                                                   first_name=first_name,
+                                                   prefix=prefix,
+                                                   last_name=last_name,
+                                                   username=teacher.login_id,
+                                                   email=teacher.email,
+                                                   role='T')
+            teachers_ids.append(inserted_id or
+                                db(db.user.username ==
+                                   teacher.login_id).select().first().id)
+        teacher_logins, teacher_names = [], []
+        try:
+            # skips teachers with non-accepted invites
+            # (they don't have a login attribute)
+            teacher_logins = [teacher.login_id for teacher in teachers
+                              if hasattr(teacher, 'login_id')]
+            teacher_names = [teacher.name for teacher in teachers
+                             if hasattr(teacher, 'login_id')]
+        except AttributeError as e:
+            # no login_id
+            msg = (f"skipped teacher of {course.name} "
+                   f"[{course.id}] due to {e}")
+            logger.warning(msg)
+        logger.debug("instructors: {0}".format(teacher_logins))  # instructors
+        return teacher_logins, teacher_names, teachers_ids
+
     # noinspection PyUnusedLocal
     def update_database_from_canvas(self,
                                     single_course=None,
@@ -1169,16 +1419,21 @@ class CanvasRobot(object):
             - collects info about assignments in assignment_summary
             - collects info about examinations files in examination_summary
             - reports new tentamination candidates
+            :param single_course
+            :param single_course_osiris_id
+            :param max_number: stop earlier
+            :param stop_list: courses to ignore
             :return number of added/updated rows
             """
 
         db = self.db
+
         msg = f'Open single course {single_course}' \
             if single_course \
             else f'open course(s) for year {self.year} - {self.year + 1}'
         self.add_message(msg, None)
         logger.info(msg)
-        num_rows = 0
+
         if single_course_osiris_id:
             courses = [self.get_course_using_osiris_id(single_course_osiris_id)]
         elif single_course:
@@ -1186,123 +1441,37 @@ class CanvasRobot(object):
         else:
             courses = self.admin.get_courses()
 
+        num_rows = 0
         num_courses = len(list(courses))
         max_number = max_number or num_courses
 
-        for idx, course in enumerate(courses):
-            self.add_message("<Progress>", (course.name, idx, num_courses))
+        with Progress(console=self.console) as progress:
+            task = progress.add_task("[green]Processing courses...",
+                                     total=num_courses)
 
-            # only insert/update course if current year unless single_course
-            if (str(course.sis_course_id)[:4] != str(self.year)
-                or course.name.endswith('conclude')) \
-                    and not (single_course or single_course_osiris_id):
-                continue
-            if course.name in (stop_list or []):
-                continue
-            if idx > max_number:
-                break
-            logger.debug("course: {}".format(course.name))  # course
-            students = course.get_users(enrollment_type="student", )
-            # remove student with name=='Test Student'
-            nr_students = len(list(filter(lambda s: s.name != 'Test student',
-                                          list(students))))
-            teachers = course.get_users(enrollment_type="teacher")
-            teachers_ids = []
-            for teacher in teachers:
-                if not hasattr(teacher, 'login_id'):
+            for idx, course in enumerate(courses):
+                self.add_message("<Progress>", (course.name, idx, num_courses))
+
+                # only insert/update course if current year unless single_course
+                if (str(course.sis_course_id)[:4] != str(self.year)
+                    or course.name.endswith('conclude')) \
+                        and not (single_course or single_course_osiris_id):
                     continue
-                # print(teacher.name)
-                first_name, last_name, prefix = self.parse_sortable_name(teacher)
-                inserted_id = db.user.update_or_insert(db.user.username ==
-                                                       teacher.login_id,
-                                                       user_id=teacher.id,
-                                                       name=teacher.name,
-                                                       first_name=first_name,
-                                                       prefix=prefix,
-                                                       last_name=last_name,
-                                                       username=teacher.login_id,
-                                                       email=teacher.email,
-                                                       role='T')
-                teachers_ids.append(inserted_id or
-                                    db(db.user.username ==
-                                       teacher.login_id).select().first().id)
-            try:
-                # skips teachers with non-accepted invites
-                # (they don't have a login attribute)
-                teacher_logins = [teacher.login_id for teacher in teachers
-                                  if hasattr(teacher, 'login_id')]
-                teacher_names = [teacher.name for teacher in teachers
-                                 if hasattr(teacher, 'login_id')]
-            except AttributeError as e:
-                msg = (f"skipped teacher of {course.name} "
-                       f"[{course.id}] due to {e}")
-                logger.warning(msg)
-                continue
-            logger.info("instructors: {0}".format(teacher_logins))  # instructors
-
-            inserted_id = None
-            format_str = "%Y-%m-%dT%H:%M:%SZ"
-            creation_date = datetime.strptime(course.created_at, format_str)
-            ignore_examinations = (
-                self.get_examinations_from_database(single_course=single_course))
-            # filter: we need only our course.id with candidate False
-            ignore_examination_names = [row.name for row in ignore_examinations
-                                        if (row.course == course.id and row.ignore)]
-            md = self.course_metadata(course.id, frozenset(ignore_examination_names))
-
-            course_id = None
-            try:
-                course_id = db.course.update_or_insert(db.course.course_id == course.id,
-                                                       course_id=course.id,
-                                                       # status=course.workflow_state,
-                                                       course_code=course.course_code,
-                                                       sis_code=course.sis_course_id,
-                                                       # year course_code and suffixes
-                                                       name=course.name,
-                                                       creation_date=creation_date,
-                                                       ac_year=self.year,
-                                                       nr_students=nr_students,
-                                                       nr_modules=md.nr_modules,
-                                                       nr_module_items=md.nr_module_items,
-                                                       nr_pages=md.nr_pages,
-                                                       nr_assignments=md.nr_assignments,
-                                                       nr_quizzes=md.nr_quizzes,
-                                                       assignments_summary=md.assignments_summary,
-                                                       examinations_summary=md.examinations_summary,
-                                                       teachers=teacher_logins,
-                                                       teachers_names=teacher_names)
-                db.commit()  # really needed here??
-            except Exception as e:
-                err = f"{e} error inserting {course.name}"
-                self.add_message("<InsertError>", err)
-                logger.exception(err)
-                raise
-            if course_id:  # a new course has been inserted in the db
-                db(db.course.id == inserted_id).update(status=2)
-            else:
-                course_id = db(db.course.course_id == course.id).select().first().id
-            for item in md.examination_records:
-                # candidate is True if course_name in examination_list else False
-                _ = db.examination.update_or_insert((db.examination.course ==
-                                                     item.course_id) &
-                                                    (db.examination.name == item.name),
-                                                    course=course_id,
-                                                    course_name=item.course_name,
-                                                    name=item.name
-                                                    )
-            for user_id in teachers_ids:
-                db.course2user.update_or_insert((db.course2user.course == course_id) &
-                                                (db.course2user.user == user_id),
-                                                course=course_id,
-                                                user=user_id,
-                                                role='T')
-
-            db.commit()
-            num_rows += 1
+                if course.name in (stop_list or []):
+                    continue
+                if idx > max_number:
+                    break
+                self.update_db_for(course, single_course=single_course)
+                num_rows += 1
+                progress.update(task, advance=1)  # Update de voortgangsbalk
 
         self.add_message("<Done>",
                          (f"Update db from Canvas "
                           f"{single_course or max_number or 'All courses'}"))
+        # record date of update
+        db.setting.update_or_insert(db.setting.id == 1,
+                                    last_db_update=datetime.now(timezone.utc))
+        db.commit()
         return num_rows
 
     def is_user_valid(self, userinfo):

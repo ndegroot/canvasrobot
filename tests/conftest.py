@@ -9,6 +9,7 @@ import pathlib
 import urllib3.connectionpool
 
 from canvasrobot import CanvasRobot
+from urltransform import UrlTransformationRobot
 
 # from pymemcache.client import base
 
@@ -30,6 +31,21 @@ def cr():
     # localDAL handles truncate of the tables if is_testing
     else:
         yield cr
+    # do something to teardown
+
+
+@pytest.fixture(scope='session')
+def tr():
+    """ Fixture to set up the test database with test data """
+    try:
+
+        tr = UrlTransformationRobot(is_testing=True)
+    except urllib3.connectionpool.MaxRetryError:
+        print("No connection")
+    # do something to initialise
+    # localDAL handles truncate of the tables if is_testing
+    else:
+        yield tr
     # do something to teardown
 
 

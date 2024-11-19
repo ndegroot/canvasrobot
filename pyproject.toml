@@ -14,8 +14,10 @@ keyring = "*"
 requests = "*"
 pyaml = "*"
 rich = "*"
-canvasapi = "^3.2.0"
+canvasapi = {path="../canvasapi", develop = true}
 attrs = "*"
+result = "*"
+pywebview = "^5.3.2"
 
 
 [tool.poetry.dev-dependencies]
