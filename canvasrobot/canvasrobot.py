@@ -288,6 +288,7 @@ class CanvasRobot(object):
                  is_debug: bool = False,
                  is_testing: bool = False,
                  db_folder: str = "",
+                 db_update: False = True,
                  fake_migrate_all: bool = False):
         self.cookies: list = []
         self.browser = None
@@ -320,17 +321,20 @@ class CanvasRobot(object):
             self.admin = None
 
         db = self.db
+
         row = db(db.setting.id == 1).select().first()
         self.last_db_update = row.last_db_update if row else datetime(1, 1, 1,
                                                                       tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
         utc_timezone = pytz.timezone('UTC')
+        if getattr(self.last_db_update, 'tzinfo') is None:
+            self.last_db_update = utc_timezone.localize(self.last_db_update).astimezone(utc_timezone)
         try:
-            delta = now - utc_timezone.localize(self.last_db_update)
-        except (TypeError, Exception):
+            delta = now - self.last_db_update
+        except (TypeError, Exception) as e:
             pass
         else:
-            if delta.days > 3:
+            if delta.days > 3 or db_update:
                 self.update_database_from_canvas()
 
         self.teacher_ids = self.lookup_teachers_db()
@@ -713,7 +717,7 @@ class CanvasRobot(object):
             # work around it by using enroll_user
             try:
                 if section:
-                    section.enroll_user(f"sis_login_id:{username}", enrollment)
+                    section.enroll_user(f"sis_login_id:{username}")
                 else:
                     course.enroll_user(f"sis_login_id:{username}", enrollment)
             except Exception as e:
@@ -1152,8 +1156,8 @@ class CanvasRobot(object):
         return counters
 
     # transformation functions
-    def search_replace_in_page(self,
-                               page,
+    @staticmethod
+    def search_replace_in_page(page,
                                search_text: str,
                                replace_text: str,
                                dryrun=False) -> Tuple[int, str]:
@@ -1436,20 +1440,31 @@ class CanvasRobot(object):
 
         if single_course_osiris_id:
             courses = [self.get_course_using_osiris_id(single_course_osiris_id)]
+            target = f" course {single_course}"
         elif single_course:
             courses = [self.get_course(single_course)]
+            target = f" course {single_course}"
         else:
             courses = self.admin.get_courses()
-
-        num_rows = 0
-        num_courses = len(list(courses))
-        max_number = max_number or num_courses
+            target = " all courses"
+        if max_number:
+            target = f" {max_number} courses"
 
         with Progress(console=self.console) as progress:
-            task = progress.add_task("[green]Processing courses...",
-                                     total=num_courses)
+            task_count = progress.add_task("[green]Counting courses...", total=None)
 
+            num_rows = 0
+            num_courses = len(list(courses))
+            max_number = max_number or num_courses
+            progress.remove_task(task_count)
+
+            task_process = progress.add_task("[green]Process courses...",
+                                             total=num_courses)
+            console.print()  # place progressbar on a new line
             for idx, course in enumerate(courses):
+                progress.update(task_process,
+                                description=f"[green]Processing course {course.name}...",
+                                advance=1)  # Update de voortgangsbalk
                 self.add_message("<Progress>", (course.name, idx, num_courses))
 
                 # only insert/update course if current year unless single_course
@@ -1457,17 +1472,19 @@ class CanvasRobot(object):
                     or course.name.endswith('conclude')) \
                         and not (single_course or single_course_osiris_id):
                     continue
-                if course.name in (stop_list or []):
+                # skip specified courses
+                if stop_list and course.name in stop_list:
                     continue
+                # break prematurely?
                 if idx > max_number:
                     break
+
                 self.update_db_for(course, single_course=single_course)
                 num_rows += 1
-                progress.update(task, advance=1)  # Update de voortgangsbalk
 
-        self.add_message("<Done>",
-                         (f"Update db from Canvas "
-                          f"{single_course or max_number or 'All courses'}"))
+            msg = f"[green]Updated db from Canvas for {target}. {num_rows} rows changed"
+            consoler.print(msg)
+            self.add_message("<Done>", msg)
         # record date of update
         db.setting.update_or_insert(db.setting.id == 1,
                                     last_db_update=datetime.now(timezone.utc))
@@ -1476,7 +1493,7 @@ class CanvasRobot(object):
 
     def is_user_valid(self, userinfo):
         """"
-        :param userinfo (dict or named tuple or Storage with
+        :param userinfo (dict, instance, named tuple or Storage instance with
         attributes id, login_id)
         :returns True for valid user, detail"""
         if isinstance(userinfo, dict):
