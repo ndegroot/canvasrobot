@@ -30,7 +30,7 @@ except ImportError:
 #  from rich.logging import RichHandler
 from rich.progress import track
 from rich.progress import Progress
-# from rich.console import Console
+from rich.console import Console
 from canvasapi.course import Course  # type: ignore
 from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment  # type: ignore
 from canvasapi.util import combine_kwargs  # type: ignore
@@ -43,6 +43,17 @@ from .canvasrobot_model import (AC_YEAR, NEXT_YEAR,  # type: ignore
                                 EXAMINATION_FOLDER, COMMUNITY_EDU_IDS)  # type: ignore
 from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, \
     Stats  # type: ignore
+
+class CustomConsole(Console):
+    def __init__(self, *args, **kwargs):
+
+        super().__init__(*args, **kwargs)
+    def print(self, *args, **kwargs):
+        if 'prefix' in kwargs and isinstance(args[0], str):
+            l_args = [ f"{kwargs['prefix']}{arg}" for arg in args]
+            args = tuple(l_args)
+            del kwargs['prefix']
+        super().print(*args, **kwargs)
 
 logging.getLogger("canvasapi").setLevel(logging.WARNING)
 # we don't need the info messages
@@ -288,12 +299,12 @@ class CanvasRobot(object):
                  is_debug: bool = False,
                  is_testing: bool = False,
                  db_folder: str = "",
-                 db_update: False = True,
+                 db_update: bool = False,
                  fake_migrate_all: bool = False):
         self.cookies: list = []
         self.browser = None
         self.queue = msg_queue  # for async use in tkinter
-        self.console = console  # for commandline use
+        self.console = console or CustomConsole() # for commandline use
         self.gui_root = gui_root  # tkinter root
         self.is_debug = is_debug
 
@@ -307,11 +318,11 @@ class CanvasRobot(object):
             self.canvas = canvasapi.Canvas(config.url, config.api_key)
             self.canvas_url = config.url
         except (canvasapi.exceptions.Forbidden, ConnectionError):
-            logger.error("login Canvas failed (Forbidden) Wrong API key?")
+            console.log("login Canvas failed (Forbidden) Wrong API key?")
             self.canvas_login = False
         else:
             if not self.canvas:
-                logger.error("login Canvas failed")
+                console.log("login Canvas failed")
                 self.canvas_login = False
         try:
 
@@ -414,16 +425,32 @@ class CanvasRobot(object):
         :param this_year: True=filter courses to include only the current year
         :returns list of courses
         """
+        console=self.console
         assert self.admin, "No (sub) admin account provided"
-        courses = []
-        for course in self.admin.get_courses(by_teachers=by_teachers):
-            # only show/insert/update course if current year
+        console.print("Get all courses, filter on current courses",
+                      prefix='[green]‣[/green] ')
+        with Progress(console=console) as progress:
+            task_count = progress.add_task("[green]Counting all courses...",
+                                           total=None)
+            filtered_courses = []
+            courses = self.admin.get_courses(by_teachers=by_teachers)
+            total = len(list(courses))
+            progress.remove_task(task_count)
 
-            if this_year and (str(course.sis_course_id)[:4] != str(self.year)
+            task_filter = progress.add_task(f"[green]Filter {total} courses...",
+                                           total=total)
+            for course in courses:
+                progress.update(task_filter,
+                                advance=1)  # Update de voortgangsbalk
+                # only show/insert/update course if current year
+                if this_year and (str(course.sis_course_id)[:4] != str(self.year)
                               or course.name.endswith('conclude')):
-                continue
-            courses.append(course)
-        return courses
+                    continue
+                filtered_courses.append(course)
+        console.print(f"Number of current courses: {len(filtered_courses)}",
+                      prefix='[green]‣[/green] '
+                      )
+        return filtered_courses
 
     def course_metadata(self, course_id, ignore_assignment_names=None):
         """
@@ -1460,7 +1487,6 @@ class CanvasRobot(object):
 
             task_process = progress.add_task("[green]Process courses...",
                                              total=num_courses)
-            console.print()  # place progressbar on a new line
             for idx, course in enumerate(courses):
                 progress.update(task_process,
                                 description=f"[green]Processing course {course.name}...",
@@ -1483,7 +1509,7 @@ class CanvasRobot(object):
                 num_rows += 1
 
             msg = f"[green]Updated db from Canvas for {target}. {num_rows} rows changed"
-            consoler.print(msg)
+            self.console.print(msg)
             self.add_message("<Done>", msg)
         # record date of update
         db.setting.update_or_insert(db.setting.id == 1,

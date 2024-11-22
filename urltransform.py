@@ -216,24 +216,28 @@ class TestCourse:
 
 if __name__ == "__main__":
 
-    # con = sqlite3.connect("databases/urltransform.db")  # open the db
     tr = UrlTransformationRobot()  # default location db: folder 'databases'
-    # init super (CanvasRobot) automatically needed?
+
     dryrun = True
+    testing = False
+
     pages_changed, count_replacements = 0, 0
     test_courses = (TestCourse(34),)
-    all_courses = tr.get_courses_in_account()
-    all_ids = (course.id for course in all_courses)
-    assert 34 in all_ids
-    courses = test_courses
-    STOP_AFTER = 1
+
+    courses = test_courses if testing else tr.get_courses_in_account()
+
+    all_ids = (course.id for course in courses)
+    # assert 34 in all_ids
+    # courses = test_courses
+    STOP_AFTER = 10
     for index, course in enumerate(courses):
 
         if index > STOP_AFTER:
             break
         tr.transform_pages_in_course(course.id, dryrun=dryrun)
 
-    tr.transformation_report += (f"<br/><p>{tr.pages_changed} "
+    tr.transformation_report += (f"<p>{index} courses checked with </p>"
+                                 f"<p>{tr.pages_changed} "
                                  f"{'pages would be changed' if dryrun else 'changed pages'},"
                                  f" {tr.count_replacements} urls "
                                  f"{'would be' if dryrun else ''} replaced</p>")
