@@ -14,7 +14,8 @@ keyring = "*"
 requests = "*"
 pyaml = "*"
 rich = "*"
-canvasapi = {path="../canvasapi", develop = true}
+# canvasapi = {path="../canvasapi", develop = true}
+canvasapi = { git = "https://github.com/ndegroot/canvasapi", branch = "issue/440-allow-sis-ids" }
 attrs = "*"
 result = "*"
 pywebview = "^5.3.2"
