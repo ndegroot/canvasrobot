@@ -1,0 +1,45 @@
+[tool.poetry]
+name = "canvasrobot"
+version = "0.8.0"
+description = "Library which uses Canvasapi https://canvasapi.readthedocs.io/en/stable/getting-started.html to provide a CanvasRobot class."
+authors = ["Nico de Groot <ndegroot0@gmail.com>",]
+readme = "README.md"
+
+[tool.poetry.scripts]
+canvasrobot_cli = 'canvasrobot.main:run'
+urltransform_cli = 'canvasrobot.urltransform:run'
+
+[tool.poetry.dependencies]
+python = ">=3.9,<4.0.0"
+openpyxl = "*"
+pydal = "*"
+toml = "*"
+keyring = "*"
+requests = "*"
+pyaml = "*"
+rich = "*"
+# canvasapi = {path="../canvasapi", develop = true}
+#canvasapi = { git = "https://github.com/ndegroot/canvasapi", branch = "issue/440-allow-sis-ids" }
+canvasapi ="*" # no sis_id!
+attrs = "*"
+result = "*"
+pywebview = "^5.3.2"
+pytz = "^2024.2"
+arrow = "^1.3.0"
+
+
+[tool.poetry.dev-dependencies]
+pytest = "*"
+mock = "*"
+pylint = "*"
+ruff = "*"
+pymemcache = "*"
+mypy = "*"
+types-requests = "*"
+types-pyyaml = "*"
+
+[tool.poetry_bumpversion.file."canvasrobot/__init__.py"]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
