@@ -1,7 +1,7 @@
 [project]
 name = "canvasrobot"
-version = "0.8.0"
-description = "Library which uses Canvasapi https://canvasapi.readthedocs.io/en/stable/getting-started.html to provide a CanvasRobot class."
+version = "0.8.1"
+description = "Library which uses Canvasapi (see https://canvasapi.readthedocs.io) to provide a CanvasRobot class."
 readme = "README.md"
 authors = [
     {name = "Nico de Groot", email = "ndegroot0@gmail.com"},
