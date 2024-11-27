@@ -1,6 +1,7 @@
 # CanvasRobot
 Library which uses
 [Canvasapi](https://canvasapi.readthedocs.io/en/stable/getting-started.html)
+(patched to allow better user search)
 to provide a CanvasRobot class for GUI and commandline use (Rich)
 ## Uses 
 [CanvasAPI](https://canvasapi.readthedocs.io/en/stable/getting-started.html)
