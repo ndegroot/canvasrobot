@@ -29,7 +29,7 @@ class CanvasConfig:
              key="url"),
         dict(msg="Enter your Canvas APi Key",
              key="api_key"),
-        dict(msg="Enter your Canvas Admin id",
+        dict(msg="Enter your Canvas Admin id or 0 ",
              key="admin_id"),
     )
 
@@ -41,7 +41,7 @@ class CanvasConfig:
         self.get_values()
 
     def get_values(self):
-        """ ask for canvas api key and url , uses keyring to
+        """ ask for canvas url, api key and admin_id , uses keyring to
         store them in a safe space"""
 
         for field in self.api_fields:
@@ -49,6 +49,8 @@ class CanvasConfig:
             self.__setattr__(field["key"], value)
 
     def get_value(self, msg, entry):
+        """get value for entry from keychain if present
+           else ask user to supply value (and store it)"""
         value = keyring.get_password(self.namespace, entry)
         if value in (None, ""):
             # noinspection PyTypeChecker
@@ -170,7 +172,7 @@ class LocalDAL(DAL):
                           Field('last_db_update', 'datetime'),
                           singular='Canvasrobot setting',
                           plural='CanvasRobot settings',
-                          migrate=True)
+                          migrate=False)
 
         self.define_table('course',
                           Field('course_id', 'integer'),
@@ -266,17 +268,23 @@ class LocalDAL(DAL):
                           plural='Submissions')
 
         self.define_table('document',
-                          Field('fname', 'string'),  # from bb
-                          Field('info', 'string'),  # editor
-                          Field('area', 'string'),  # from bb
-                          Field('url', 'string'),  # from bb
+                          Field('course',
+                                'reference course',
+                                requires=validators.IS_IN_DB(self, 'course.id',
+                                                             self.course._format)),
+                          Field('filename', 'string'),  # from lms
+                          Field('content_type', 'string'),  # from lms
+                          Field('size', 'integer'),  # from lms
+                          Field('folder_id', 'integer'),  # from lms
+                          Field('url', 'string'),  # from lms
                           # editor 0= unchecked 1= failed =  2: ok
-                          Field('check_status', 'integer'),
-                          Field('http_status', 'integer'),  # download status
+                          Field('check_status', 'integer', default=0),
+                          Field('upload_status', 'integer'),  # upload status lms
+                          Field('download_status', 'integer'),  # upload status lms
                           Field('memo', 'string'),  # memo
                           # safe upload of files, keeps filenames
-                          Field('bbfile', 'upload'),
-                          Field('course_id', 'reference course'))
+                          Field('file', 'upload'),
+                          migrate=True)
         if is_testing:
             self.truncate_all_tables()
 

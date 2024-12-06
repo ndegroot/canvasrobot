@@ -16,6 +16,14 @@ def test_enroll_student():
     assert '4472' in result.output
 
 
+def test_search_course():
+    runner = CliRunner()
+    result = runner.invoke(run,
+                           ['--do', 'search_course'],
+                           input='zoek\njezelf\n34\n')
+    assert result.exit_code == 0
+
+
 def test_search_all_courses():
     runner = CliRunner()
     result = runner.invoke(run,
@@ -23,3 +31,15 @@ def test_search_all_courses():
                            input='zoek\njezelf\n')
     assert result.exit_code == 0
     assert 'Nico de Groot' in result.output
+
+
+def tst_db_auto_update_no_value():
+    # no arg : False (default)
+    # arg no value: True
+    runner = CliRunner()
+    result = runner.invoke(run,
+                           ['--db_auto_update'])
+    assert not result
+
+
+

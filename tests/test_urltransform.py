@@ -1,5 +1,7 @@
 import pytest
 import textwrap
+from click.testing import CliRunner
+from urltransform import run
 
 
 def test_mediasite2panopto(tr):
@@ -26,8 +28,26 @@ def test_mediasite2panopto(tr):
     assert updated, "'updated' should be 'True' as 'source' contains a videocollege url"
     assert ('https://tilburguniversity.cloud.panopto.eu/Panopto/'
             'Pages/Viewer.aspx?id=221a5d47-84ea-44e1-b826-af52017be85c') in target
-    # don't change non-redirecting urls, report them
+    # don't change non-redirecting urls, just report them
     bad_ms_url = 'https://videocollege.uvt.nl/Mediasite/Play/ce152c1602144b80bad5a222b7d4cc731'
     assert bad_ms_url in target, f"{bad_ms_url} should not be changed"
 
     assert bad_ms_url in tr.transformation_report
+
+
+def test_transform_single():
+    runner = CliRunner()
+    result = runner.invoke(run,
+                           ['--single_course', 34],
+                            )
+    assert result.exit_code == 0
+    assert bad_ms_url not in result.output
+
+
+def test_transform_all():
+    runner = CliRunner()
+    result = runner.invoke(run,
+#                            ['--single_course', 34],
+                            )
+    assert result.exit_code == 0
+    assert bad_ms_url not in result.output

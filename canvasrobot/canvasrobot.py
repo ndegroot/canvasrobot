@@ -7,6 +7,7 @@ import os
 import re
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import pytz
 import logging
 import binascii
@@ -44,16 +45,18 @@ from .canvasrobot_model import (AC_YEAR, NEXT_YEAR,  # type: ignore
 from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, \
     Stats  # type: ignore
 
+
 class CustomConsole(Console):
     def __init__(self, *args, **kwargs):
-
         super().__init__(*args, **kwargs)
+
     def print(self, *args, **kwargs):
         if 'prefix' in kwargs and isinstance(args[0], str):
-            l_args = [ f"{kwargs['prefix']}{arg}" for arg in args]
+            l_args = [f"{kwargs['prefix']}{arg}" for arg in args]
             args = tuple(l_args)
             del kwargs['prefix']
         super().print(*args, **kwargs)
+
 
 logging.getLogger("canvasapi").setLevel(logging.WARNING)
 # we don't need the info messages
@@ -154,7 +157,8 @@ def course_get_folder(course, folder_name: str):
 
 
 def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=None) -> CourseMetadata:
-    """"
+    """
+    for course get the metadata from memcached if available. return CourseMetadata instance
     :course_id
     :canvas                     the canvas api object
     :ignore_assignment_names
@@ -188,6 +192,7 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
         pages = course.get_pages()
         pages = filter(lambda p: p.title[0:3] != 'UVT', pages)
         nr_pages = len(list(pages))
+
         assignments = course.get_assignments()
         assignments_summary = "Assignments:\n" if list(assignments) \
             else "No assignments"
@@ -231,8 +236,10 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
                                                 f"{submission.graded_at}\n")
             assignments_summary += f"\n{submissions_summary}"
         nr_assignments = len(list(assignments))
+
         quizzes = course.get_quizzes()
         nr_quizzes = len(list(quizzes))
+
         all_files = course.get_files()
         nr_files = len(list(all_files))
 
@@ -273,7 +280,8 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
         return cmd
 
     if MEMCACHED:
-        memc_key = f"{course_id}{hash(ignore_assignment_names)}"
+        # memc_key = f"{course_id}{hash(ignore_assignment_names)}"
+        memc_key = f"{course_id}c_m_c"
         md = MEMCACHED.get(memc_key)
         if md:
             return md
@@ -299,54 +307,59 @@ class CanvasRobot(object):
                  is_debug: bool = False,
                  is_testing: bool = False,
                  db_folder: str = "",
-                 db_update: bool = False,
+                 db_auto_update: bool = False,
+                 db_force_update: bool = False,
                  fake_migrate_all: bool = False):
         self.cookies: list = []
         self.browser = None
         self.queue = msg_queue  # for async use in tkinter
-        self.console = console or CustomConsole() # for commandline use
+        self.console = console or CustomConsole()  # for commandline use
         self.gui_root = gui_root  # tkinter root
         self.is_debug = is_debug
 
-        db_folder = db_folder or os.path.join(os.getcwd(), 'databases')
+        self.db_folder = Path(db_folder) if db_folder else Path.cwd() / 'databases'
         self.db = LocalDAL(is_testing=is_testing,
                            fake_migrate_all=fake_migrate_all,
-                           folder=db_folder)
+                           folder=self.db_folder)
 
         config = CanvasConfig(reset_api_keys=reset_api_keys, gui_root=gui_root)
         try:
             self.canvas = canvasapi.Canvas(config.url, config.api_key)
             self.canvas_url = config.url
         except (canvasapi.exceptions.Forbidden, ConnectionError):
-            console.log("login Canvas failed (Forbidden) Wrong API key?")
+            self.console.log("login Canvas failed (Forbidden) Wrong API key?")
             self.canvas_login = False
         else:
             if not self.canvas:
-                console.log("login Canvas failed")
+                self.console.log("login Canvas failed")
                 self.canvas_login = False
         try:
-
             self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
                 else None
-        except (canvasapi.exceptions.Forbidden, ConnectionError, Exception):
+        except (canvasapi.exceptions.Forbidden, ConnectionError, Exception) as e:
             self.admin = None
+            self.console.log(f"Warning {e} no admin account?")
 
         db = self.db
 
-        row = db(db.setting.id == 1).select().first()
-        self.last_db_update = row.last_db_update if row else datetime(1, 1, 1,
-                                                                      tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        utc_timezone = pytz.timezone('UTC')
-        if getattr(self.last_db_update, 'tzinfo') is None:
-            self.last_db_update = utc_timezone.localize(self.last_db_update).astimezone(utc_timezone)
-        try:
-            delta = now - self.last_db_update
-        except (TypeError, Exception) as e:
-            pass
-        else:
-            if delta.days > 3 or db_update:
-                self.update_database_from_canvas()
+        if db_force_update:
+            self.update_database_from_canvas()
+        elif db_auto_update:
+            # is an update needed?
+            row = db(db.setting.id == 1).select().first()
+            self.last_db_update = row.last_db_update if row else datetime(1, 1, 1,
+                                                                          tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            utc_timezone = pytz.timezone('UTC')
+            if getattr(self.last_db_update, 'tzinfo') is None:
+                self.last_db_update = utc_timezone.localize(self.last_db_update).astimezone(utc_timezone)
+            try:
+                delta = now - self.last_db_update
+            except (TypeError, Exception) as _:
+                pass
+            else:
+                if db_auto_update and delta.days > 3:
+                    self.update_database_from_canvas()
 
         self.teacher_ids = self.lookup_teachers_db()
 
@@ -425,12 +438,15 @@ class CanvasRobot(object):
         :param this_year: True=filter courses to include only the current year
         :returns list of courses
         """
-        console=self.console
-        assert self.admin, "No (sub) admin account provided"
+        console = self.console
+        if not self.admin:
+            console.log("No (sub) admin account provided")
+            return []
+
         console.print("Get all courses, filter on current courses",
                       prefix='[green]‣[/green] ')
         with Progress(console=console) as progress:
-            task_count = progress.add_task("[green]Counting all courses...",
+            task_count = progress.add_task("[green]Getting all courses...",
                                            total=None)
             filtered_courses = []
             courses = self.admin.get_courses(by_teachers=by_teachers)
@@ -438,13 +454,13 @@ class CanvasRobot(object):
             progress.remove_task(task_count)
 
             task_filter = progress.add_task(f"[green]Filter {total} courses...",
-                                           total=total)
+                                            total=total)
             for course in courses:
                 progress.update(task_filter,
                                 advance=1)  # Update de voortgangsbalk
                 # only show/insert/update course if current year
                 if this_year and (str(course.sis_course_id)[:4] != str(self.year)
-                              or course.name.endswith('conclude')):
+                                  or course.name.endswith('conclude')):
                     continue
                 filtered_courses.append(course)
         console.print(f"Number of current courses: {len(filtered_courses)}",
@@ -722,7 +738,7 @@ class CanvasRobot(object):
         enrollment={'type': 'StudentEnrollment'}
         :returns: result of course enrollment as a str...
         """
-        if enrollment is None:
+        if enrollment in (None, {}):
             enrollment = dict(type="StudentEnrollment")
         if search:
             try:
@@ -746,7 +762,7 @@ class CanvasRobot(object):
                 if section:
                     section.enroll_user(f"sis_login_id:{username}")
                 else:
-                    course.enroll_user(f"sis_login_id:{username}", enrollment)
+                    course.enroll_user(f"sis_login_id:{username}", enrollment=enrollment)
             except Exception as e:
                 msg = f"Failed with {e} while using special syntax for sys_login_id"
                 self.errors.append(msg)
@@ -1063,7 +1079,7 @@ class CanvasRobot(object):
     #     :param max_courses:
     #     :returns list of found files
     #     """
-    #     courses = self.get_bbcourses(single_course=single_course)
+    #     courses = self.get_courses(single_course=single_course)
     #     logger.info("{} courses to scan".format(len(courses)))
     #
     #     total_files: Optional[list] = []
@@ -1099,29 +1115,29 @@ class CanvasRobot(object):
     #     self.execute_command('showuser', user_id)
     #     time.sleep(120)
 
-    def update_documents(self, files):
-        """ insert file object properties (fname, url) in table bbdocument
+    def update_documents_db(self, files):
+        """ insert file object properties (fname, url) in table document
         :param files: list of file objects ( containing fname, url)
         """
         db = self.db
         for c_file in files:
             # lookup bbcourse id
-            bbcourse_id = db(db.bbcourse.bb_id ==
-                             self.internal_id).select(db.bbcourse.id).first().id
+            course_id = db(db.course.course_id ==
+                           self.internal_id).select(db.course.id).first().id
             try:
                 if c_file.level > 1:
-                    db.bbdocument.update_or_insert(db.bbdocument.url == c_file.url,
-                                                   url=c_file.url,
-                                                   name=c_file.name,
-                                                   bbcourse_id=bbcourse_id,
-                                                   area=c_file.area_name,
-                                                   check_status=0)
+                    db.document.update_or_insert(db.document.url == c_file.url,
+                                                 url=c_file.url,
+                                                 name=c_file.name,
+                                                 course_id=course_id,
+                                                 area=c_file.area_name,
+                                                 check_status=0)
                 else:
-                    db.bbdocument.update_or_insert(db.bbdocument.url == c_file.url,
-                                                   url=c_file.url,
-                                                   name=c_file.name,
-                                                   bbcourse_id=bbcourse_id,
-                                                   area=c_file.area_name)
+                    db.document.update_or_insert(db.document.url == c_file.url,
+                                                 url=c_file.url,
+                                                 name=c_file.name,
+                                                 course_id=course_id,
+                                                 area=c_file.area_name)
             except Exception as e:
                 logger.error(
                     "'{0}' error in update_documents() while inserting "
@@ -1129,17 +1145,17 @@ class CanvasRobot(object):
             else:
                 db.commit()
 
-    def get_list_of_documents(self):
+    def get_list_of_documents_db(self):
         """ get documents/attachments from db als a list
         """
         db = self.db
         suffix = '-{}-'.format(self.year)
         try:
-            items = db((db.bbcourse.course_suffix.contains(suffix)) &
-                       (db.bbdocument.bbcourse_id ==
-                        db.bbcourse.id)).select(db.bbdocument.ALL)
+            items = db((db.course.course_suffix.contains(suffix)) &
+                       (db.document.course_id ==
+                        db.course.id)).select(db.document.ALL)
         except Exception as e:
-            logger.error("*{0} error in get_list_of_ documents() "
+            logger.error("*{0} error in get_list_of_documents_db() "
                          "while selecting documents*".format(e))
             return []
         else:
@@ -1147,9 +1163,10 @@ class CanvasRobot(object):
 
     # noinspection PyUnresolvedReferences
     def download_documents_localfs(self):
+        """ retrieve the real documents from LMS """
         db = self.db
         counters = namedtuple('Counters', ['total', 'ok', 'failed'])
-        items = self.get_list_of_documents()
+        items = self.get_list_of_documents_db()
         counters.total = len(items)
         counters.ok = 0
         counters.failed = 0
@@ -1159,9 +1176,46 @@ class CanvasRobot(object):
                 counters.ok += 1
             else:
                 counters.failed += 1
-            db(db.bbdocument.id == item.id).update(http_status=status)
+            db(db.document.id == item.id).update(http_status=status)
         db.commit()
         return counters
+
+    def transfer_file_to_server(self, url=None, fname=None):
+        """download a file to uploads folder from external url using a temporary buffer
+        :param fname: original name of file
+        :param url: remote url to fetch file from
+        """
+        db = self.db
+        filename = fname.strip()
+        logger.debug("creating transfer buffer %s for %s" % (filename, url))
+        # convert to fname/value pairs
+        cookies = {}
+        for cookie in self.cookies:
+            cookies[str(cookie['fname'])] = cookie['value']
+        #
+        logger.info("cookies %s for %s" % (cookies, url))
+        with io.BytesIO() as outfile:
+            try:
+                r = requests.get(url, cookies=cookies, stream=True)
+            except requests.exceptions.RequestException as e:
+                logger.error("couldn't get {} from file {} due to {}".format(filename,
+                                                                             url,
+                                                                             e))
+                return None
+
+            if r.status_code == 200:
+                self.receive_file(db, filename, outfile, r, url)
+            else:
+                logger.info("html response {} url is now {}".format(r.status_code,
+                                                                    r.url))
+                # try again with redirected url (we assume redirection)
+                r = requests.get(r.url, cookies=cookies, stream=True)
+                if r.status_code == 200:
+                    self.receive_file(db, filename, outfile, r, url)
+                else:
+                    logger.error('Failed {0}'.format(r))
+
+        return r.status_code
 
     # noinspection PyUnresolvedReferences
     def transfer_files_to_server(self):
@@ -1178,7 +1232,7 @@ class CanvasRobot(object):
                 counters.ok += 1
             else:
                 counters.failed += 1
-            db(db.bbdocument.id == item.id).update(http_status=status)
+            db(db.document.id == item.id).update(http_status=status)
         db.commit()
         return counters
 
@@ -1189,7 +1243,7 @@ class CanvasRobot(object):
                                replace_text: str,
                                dryrun=False) -> Tuple[int, str]:
         """
-        :param page: Canvas page object to be updated
+        :param page: Canvas page object to be searched or updated
         :param search_text: text to search
         :param replace_text: text to replace with
         :param dryrun: no updates, only return marked body if True
@@ -1208,28 +1262,71 @@ class CanvasRobot(object):
                                     course_id: int,
                                     source: str,
                                     target: str,
-                                    dryrun=False) -> Tuple[int, str]:
+                                    dryrun=False) -> Tuple[int, list[Tuple], str]:
         """
         In a course replace text (or html) in all pages
         :param course_id: canvas course_id
         :param source: text te find
         :param target: text to replace with
         :param dryrun: True: don't update just return marked body
-        :return:
+        :returns tuple of count, list of page tuples, string of html bodies
         """
         total_count = 0
         marked_bodies = ""
+        found_pages = []
         course = self.canvas.get_course(course_id)
+        # check if the course is selected only because of an studentEnrollment
+        if course.enrollments and len(course.enrollments) > 0:
+            for enrollment in course.enrollments:
+                if enrollment['role'] == 'StudentEnrollment':
+                    return 0, [], ""  # effectively skipping
+
         pages = course.get_pages(include=['body'])
         pages = filter(lambda p: p.title[0:3] != 'UVT', pages)  # skip
         for page in pages:
-            if source in page.body:
-                count, new_body = search_replace_in_page(page, source, target, dryrun)
+            if page.body and source in page.body:
+                count, new_body = self.search_replace_in_page(page, source, target, dryrun)
+                if count:
+                    found_pages.append((course_id, course.name, page.url, page.title))
                 total_count += count
                 if dryrun:
                     marked_bodies += new_body
 
-        return total_count, marked_bodies
+        return total_count, found_pages, marked_bodies
+
+    def course_search_replace_pages_all_courses(self,
+                                                source: str,
+                                                target: str,
+                                                dryrun=False):
+
+        with Progress(console=self.console) as progress:
+            task_count = progress.add_task("[green]Getting all courses...",
+                                           total=None)
+            courses = self.canvas.get_courses()
+            total = len(list(courses))
+            progress.remove_task(task_count)
+
+            task_filter = progress.add_task(f"[green]Search {total} courses...",
+                                            total=total)
+
+            sum_count, sum_found_pages, sum_marked_bodies = 0, [], ""
+            for course in courses:
+                progress.update(task_filter,
+                                advance=1)  # Update de voortgangsbalk
+                try:
+                    count, found_pages, marked_bodies = self.course_search_replace_pages(course_id=course.id,
+                                                                                         source=source,
+                                                                                         target=target,
+                                                                                         dryrun=dryrun)
+                    sum_count += count
+                    if found_pages:
+                        sum_found_pages.extend(found_pages),
+                    sum_marked_bodies += marked_bodies
+                except Exception as e:
+                    logger.error("Error {}".format(e))
+                    pass
+
+        return sum_count, sum_found_pages, sum_marked_bodies
 
     def get_examinations_from_database(self,
                                        single_course=None,
@@ -1340,28 +1437,37 @@ class CanvasRobot(object):
 
         md = self.course_metadata(course.id, frozenset(ignore_examination_names))
 
-        course_id = self.update_db_course(course, creation_date, md, nr_students, teacher_logins, teacher_names)
+        c_id = self.update_db_course(course, creation_date, md, nr_students, teacher_logins, teacher_names)
 
-        if course_id:  # a new course has been inserted in the db
-            db(db.course.id == course_id).update(status=2)
+        if c_id:  # a new course has been inserted in the db
+            db(db.course.id == c_id).update(status=2)
         else:
-            course_id = db(db.course.course_id == course.id).select().first().id
+            c_id = db(db.course.course_id == course.id).select().first().id
 
         for item in md.examination_records:
             # candidate is True if course_name in examination_list else False
             _ = db.examination.update_or_insert((db.examination.course ==
                                                  item.course_id) &
                                                 (db.examination.name == item.name),
-                                                course=course_id,
+                                                course=c_id,
                                                 course_name=item.course_name,
                                                 name=item.name
                                                 )
         for user_id in teachers_ids:
-            db.course2user.update_or_insert((db.course2user.course == course_id) &
+            db.course2user.update_or_insert((db.course2user.course == c_id) &
                                             (db.course2user.user == user_id),
-                                            course=course_id,
+                                            course=c_id,
                                             user=user_id,
                                             role='T')
+        for file in course.get_files():
+            _ = db.document.update_or_insert((db.document.course == c_id) &
+                                             (db.document.url == file.url),
+                                             course=c_id,
+                                             folder_id=file.folder_id,
+                                             url=file.url,
+                                             filename=file.filename,
+                                             size=file.size,
+                                             content_type=getattr(file, 'content-type'))
 
         db.commit()
 
@@ -1650,7 +1756,7 @@ class CanvasRobot(object):
         return d['first_name_par'] or d['first_name'], d['prefix'] or '', d['last_name']
 
     def download_file(self, url=None, fname=None):
-        """download a file to static folder from url
+        """download a remote file to static folder from url
         :param fname: local file to write to
         :param url: remote url to fetch file from
         """
@@ -1671,45 +1777,9 @@ class CanvasRobot(object):
                 logger.info("html error %s" % r.status_code)
         return r.status_code
 
-    def transfer_file_to_server(self, url=None, fname=None):
-        """download a file to uploads folder from external url using a temporary buffer
-        :param fname: original name of file
-        :param url: remote url to fetch file from
-        """
-        db = self.db
-        filename = fname.strip()
-        logger.debug("creating transfer buffer %s for %s" % (filename, url))
-        # convert to fname/value pairs
-        cookies = {}
-        for cookie in self.cookies:
-            cookies[str(cookie['fname'])] = cookie['value']
-        #
-        logger.info("cookies %s for %s" % (cookies, url))
-        with io.BytesIO() as outfile:
-            try:
-                r = requests.get(url, cookies=cookies, stream=True)
-            except requests.exceptions.RequestException as e:
-                logger.error("couldn't get {} from file {} due to {}".format(filename,
-                                                                             url,
-                                                                             e))
-                return None
-
-            if r.status_code == 200:
-                self.receive_file(db, filename, outfile, r, url)
-            else:
-                logger.info("html response {} url is now {}".format(r.status_code,
-                                                                    r.url))
-                # try again with redirected url (we assume redirection)
-                r = requests.get(r.url, cookies=cookies, stream=True)
-                if r.status_code == 200:
-                    self.receive_file(db, filename, outfile, r, url)
-                else:
-                    logger.error('Failed {0}'.format(r))
-
-        return r.status_code
-
     @staticmethod
     def receive_file(db, filename, outfile, r, url):
+        """ receive downloading file in database"""
         logger.debug('Start receiving file in buffer')
         for block in r.iter_content(1024):
             if not block:
