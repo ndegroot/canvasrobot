@@ -18,8 +18,10 @@ def run():
     # enroll_student(robot)  # working!
     # courses = robot.get_courses_in_account()
     # search_replace_pages(robot)
+
     course = robot.get_course(TEST_COURSE)
     robot.update_db_for(course)
+    # rows = robot.get_list_of_documents_db(course_id=TEST_COURSE)
     robot.report_errors()
 
 

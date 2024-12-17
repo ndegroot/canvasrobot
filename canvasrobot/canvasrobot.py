@@ -3,6 +3,7 @@ from typing import Tuple, Optional, Union, Callable
 import io
 import json
 import mimetypes
+from urllib.parse import unquote_plus
 import os
 import re
 from collections import namedtuple
@@ -306,7 +307,7 @@ class CanvasRobot(object):
                  gui_root=None,  # optional Tkinter root
                  is_debug: bool = False,
                  is_testing: bool = False,
-                 db_folder: str = "",
+                 db_folder: Path = None,
                  db_auto_update: bool = False,
                  db_force_update: bool = False,
                  fake_migrate_all: bool = False):
@@ -317,7 +318,7 @@ class CanvasRobot(object):
         self.gui_root = gui_root  # tkinter root
         self.is_debug = is_debug
 
-        self.db_folder = Path(db_folder) if db_folder else Path.cwd() / 'databases'
+        self.db_folder = db_folder if db_folder else Path.cwd() / 'databases'
         self.db = LocalDAL(is_testing=is_testing,
                            fake_migrate_all=fake_migrate_all,
                            folder=self.db_folder)
@@ -1145,15 +1146,20 @@ class CanvasRobot(object):
             else:
                 db.commit()
 
-    def get_list_of_documents_db(self):
+    def get_list_of_documents_db(self, course_id=None):
         """ get documents/attachments from db als a list
         """
         db = self.db
-        suffix = '-{}-'.format(self.year)
+        if course_id:
+            qry = ((db.course.ac_year == self.year) &
+                   (db.document.course ==db.course.id) &
+                   (db.course.course_id == course_id))
+        else:
+            qry = ((db.course.ac_year == self.year) &
+               (db.document.course == db.course.id))
+
         try:
-            items = db((db.course.course_suffix.contains(suffix)) &
-                       (db.document.course_id ==
-                        db.course.id)).select(db.document.ALL)
+            items = db(qry).select(db.document.ALL, db.course.course_id, db.course.name)
         except Exception as e:
             logger.error("*{0} error in get_list_of_documents_db() "
                          "while selecting documents*".format(e))
@@ -1459,13 +1465,14 @@ class CanvasRobot(object):
                                             course=c_id,
                                             user=user_id,
                                             role='T')
-        for file in course.get_files():
+        files = course.get_files()
+        for file in files:
             _ = db.document.update_or_insert((db.document.course == c_id) &
                                              (db.document.url == file.url),
                                              course=c_id,
                                              folder_id=file.folder_id,
                                              url=file.url,
-                                             filename=file.filename,
+                                             filename=unquote_plus(file.filename),
                                              size=file.size,
                                              content_type=getattr(file, 'content-type'))
 

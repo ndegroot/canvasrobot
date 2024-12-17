@@ -15,6 +15,10 @@ from canvasrobot import CanvasRobot, Field
 from .commandline import create_db_folder, get_logger
 
 
+MS_URL = "https://videocollege.uvt.nl/Mediasite/Play/%s"
+PN_URL = "https://tilburguniversity.cloud.panopto.eu/Panopto/Pages/Viewer.aspx?id=%s"
+
+
 logger = get_logger("urltransform")
 
 
@@ -85,13 +89,13 @@ class UrlTransformationRobot(CanvasRobot):
     pages_changed = 0
     count_replacements = 0
 
-    def __init__(self, db_folder=None,
-                 is_testing=False,
-                 db_auto_update=False,
-                 db_force_update=False):
+    def __init__(self, db_folder: Path = None,
+                 is_testing: bool = False,
+                 db_auto_update: bool = False,
+                 db_force_update: bool = False):
         super().__init__(db_folder=db_folder,
                          is_testing=is_testing,
-                         db_no_update=db_no_update,
+                         db_auto_update=db_auto_update,
                          db_force_update=db_force_update)
         self.add_media_ids_table()
         if self.db(self.db.ids).isempty():
@@ -142,7 +146,7 @@ class UrlTransformationRobot(CanvasRobot):
 
     # End database section
 
-    def mediasite2panopto(self, text: str, dryrun=False) -> (str, bool):
+    def mediasite2panopto(self, text: str, dryrun=False) -> (str, bool, int):
         """
         :param text possibly with mediasite urls
         :param dryrun: if true just statistics, no action
@@ -223,7 +227,7 @@ def go_up(path, levels=1):
 @click.option("--db_force_update", default=False, is_flag=True,
               help="Force db update. Otherwise periodic.")
 @click.option("--stop_after", default=0, help="Stop after this many courses.")
-def run(dryrun, single_course, db_no_update, db_force_update,
+def cli(dryrun, single_course, db_no_update, db_force_update,
         stop_after):
 
     path = create_db_folder()
@@ -248,4 +252,4 @@ def run(dryrun, single_course, db_no_update, db_force_update,
 
 
 if __name__ == '__main__':
-    run()
+    cli()
