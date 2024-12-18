@@ -102,7 +102,7 @@ source = { git = "https://github.com/ndegroot/canvasapi?branch=issue%2F440-allow
 
 [[package]]
 name = "canvasrobot"
-version = "0.8.24"
+version = "0.8.25"
 source = { editable = "." }
 dependencies = [
     { name = "arrow" },

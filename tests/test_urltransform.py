@@ -23,7 +23,7 @@ def test_mediasite2panopto(tr):
 
 
     """)
-    target, updated, count_replacements = tr.mediasite2panopto(source)
+    target, updated, count_replacements = tr.mediasite2panopto(source, dryrun=False)
     print(target)
 
     assert updated, "'updated' should be 'True' as 'source' contains a videocollege url"
@@ -37,7 +37,7 @@ def test_mediasite2panopto(tr):
     assert bad_ms_url in tr.transformation_report
 
 
-def test_transform_single():
+def tst_transform_single():
     runner = CliRunner()
     result = runner.invoke(run,
                            ['--single_course', 34],
@@ -46,7 +46,7 @@ def test_transform_single():
     assert bad_ms_url not in result.output
 
 
-def test_transform_all():
+def tst_transform_all():
     runner = CliRunner()
     result = runner.invoke(run,
 #                            ['--single_course', 34],

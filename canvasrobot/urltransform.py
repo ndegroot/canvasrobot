@@ -12,6 +12,7 @@ import rich_click as click
 
 from result import Ok, Err, Result, is_ok, is_err
 from canvasrobot import CanvasRobot, Field
+import canvasapi
 from .commandline import create_db_folder, get_logger
 
 
@@ -40,11 +41,11 @@ def show_result(html: str):
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Zoekresultaat</title>
+      <title>Search Results</title>
     </head>
     <body>
-      <h2>Mediasite urls without replacement:</h2>
-      <p>Klik op de link(s) om de pagina te openen.</p>
+      <h2>Pages with Mediasite URLs</h2>
+      <p>Use the link(s) to check the pages or video URLs.</p>
       <hr/>
       {}
       <hr/>
@@ -146,8 +147,9 @@ class UrlTransformationRobot(CanvasRobot):
 
     # End database section
 
-    def mediasite2panopto(self, text: str, dryrun=False) -> (str, bool, int):
+    def mediasite2panopto(self, text: str, dryrun=True) -> (str, bool, int):
         """
+        Replace links in a single page
         :param text possibly with mediasite urls
         :param dryrun: if true just statistics, no action
         :returns text with updated urls if panopto id are found in lookup
@@ -164,7 +166,10 @@ class UrlTransformationRobot(CanvasRobot):
         # match each source-url and extract the id into a  list of ms_ids
         matches = re.findall(r'(https://videocollege\.uvt\.nl/Mediasite/Play/([a-z0-9]+))', text)
 
+        msg = (f"<p><a href={self.current_page_url} target='_blank'>"
+               f" Open page '{self.current_page}'</a></p>")
         # for each ms_id: lookup p_id and construct new target-url
+        action_or_not = 'would become' if dryrun else 'is changed into'
         for match in matches:
             ms_url = match[0]
             ms_id = match[1]
@@ -173,36 +178,45 @@ class UrlTransformationRobot(CanvasRobot):
                 # replace source-url with target-url
                 pn_url = PN_URL % pn_id
                 updated_text, count = replace_and_count(text, ms_url, pn_url, dryrun=dryrun)
+                msg += (f"<p><a href={ms_url} target='_blank'>{ms_url}</a>"
+                        f" {action_or_not} <a href={pn_url} target='_blank'>{pn_url}</a></p>")
+
                 count_replacements += count
                 updated = True
             else:
                 # no corresponding panopto id found in dv
-                msg = (f"<a href={self.current_page_url} target='_blank'>{self.current_page}</a>"
-                       f" has mediasite url {ms_url} which is NOT transformed "
-                       f"because the mediasite id is not found in DB.")
+                msg += (f"<p>Page "
+                        f" has mediasite url {ms_url} which could NOT be transformed "
+                        f"because the mediasite id is not found in DB.</p>")
                 logger.info(msg)
                 self.transformation_report += (msg + '<br/>')
         return updated_text, updated, count_replacements
 
-    def transform_pages_in_course(self, course_id: int, dryrun=False):
+    def transform_pages_in_course(self, course_id: int, dryrun=True) -> bool:
         """
         Transform the mediasite urls in all pages of the course with this course_id
         :param course_id:
-        :param dryrun: if true just statistics
+        :param dryrun: if true no action just predictions
         :return:
         """
-        pages = self.course_get_pages(course_id)  # example
-        for page in pages:
-            if page.body:
-                self.current_page_url = page.html_url
-                self.current_page = page.title
-                new_body, updated, count = self.mediasite2panopto(page.body)
-                self.count_replacements += count
-                if updated:
-                    self.pages_changed += 1
-                    if not dryrun:
-                        page.edit(wiki_page=dict(body=new_body))
-        return
+        try:
+            pages = self.course_get_pages(course_id)  # example
+
+        except (Exception, canvasapi.exceptions.Forbidden) as e:
+            self.errors.append(f"course {course_id} skipped due to {e}")
+            return False
+        else:
+            for page in pages:
+                if page.body:
+                    self.current_page_url = page.html_url
+                    self.current_page = page.title
+                    new_body, updated, count = self.mediasite2panopto(page.body, dryrun=dryrun)
+                    self.count_replacements += count
+                    if updated:
+                        self.pages_changed += 1
+                        if not dryrun:
+                            page.edit(wiki_page=dict(body=new_body))
+        return True
 
 
 @define
@@ -218,20 +232,26 @@ def go_up(path, levels=1):
 
 
 @click.command()
-@click.option("--dryrun", default=True, is_flag=True,
-              help="If given only show *possible* result.")
+@click.pass_context
+@click.option("--dryrun/--do_it", default=True, is_flag=True,
+              help="Only show *possible* results, no changes unless --do_it is given instead.")
 @click.option("--single_course", default=0,
               help="Give Canvas id of a single course.")
-@click.option("--db_no_update", default=True, is_flag=True,
-              help="Don't update.")
+@click.option("--db_auto_update", default=False, is_flag=True,
+              help="Don't update the database automatically.")
 @click.option("--db_force_update", default=False, is_flag=True,
               help="Force db update. Otherwise periodic.")
 @click.option("--stop_after", default=0, help="Stop after this many courses.")
-def cli(dryrun, single_course, db_no_update, db_force_update,
+def cli(ctx, dryrun, single_course, db_auto_update, db_force_update,
         stop_after):
-
+    if ('single_course' not in ctx.params.keys() and
+            click.confirm("Continue handling all courses?")):
+        click.echo("Aborted!")
+        return
+    if dryrun:
+        click.echo("Just a dryrun, no changes to the pages.")
     path = create_db_folder()
-    tr = UrlTransformationRobot(db_no_update=db_no_update,
+    tr = UrlTransformationRobot(db_auto_update=db_auto_update,
                                 db_force_update=db_force_update,
                                 db_folder=path)  # default location db: folder 'databases'
 
@@ -241,6 +261,8 @@ def cli(dryrun, single_course, db_no_update, db_force_update,
         if stop_after and index > stop_after:
             break
         tr.transform_pages_in_course(course.id, dryrun=dryrun)
+
+    # conclusion
     tr.transformation_report += (f"<p>{index} courses checked.</p>"
                                  f"<p>{tr.pages_changed} "
                                  f"{'pages would be changed' if dryrun else 'pages were changed'},"
