@@ -1,7 +1,9 @@
-import pytest
+from pydal.objects import Row, Rows
 import textwrap
 from click.testing import CliRunner
-from urltransform import cli
+from canvasrobot.urltransform import cli
+from canvasrobot.urltransform import TransformedPage
+from main import TEST_COURSE
 
 
 def test_mediasite2panopto(tr):
@@ -37,19 +39,43 @@ def test_mediasite2panopto(tr):
     assert bad_ms_url in tr.transformation_report
 
 
-def tst_transform_single():
+def test_transformed_page():
+
+    _ = TransformedPage(title="eerste", url="https://example1.com")
+    _ = TransformedPage(title="tweede", url="https://example2.com")
+
+    assert TransformedPage.get_column('title') == ["eerste",
+                                                   "tweede"]
+    assert TransformedPage.get_column('url') == ["https://example1.com",
+                                                 "https://example2.com"]
+
+
+def test_transform_single(tr):
+
+    # tr is the pytest fixture- td.db is the test database
+    testcourse_id: int = 34
+    tr.transform_pages_in_course(testcourse_id, dryrun=True)
+    transform_data = tr.get_transform_data(testcourse_id)
+    assert transform_data, f"Make sure course {testcourse_id} contains transform candidates"
+
+
+def test_transform_single_cli():
+    testcourse_id: int = 34
+
+    # CliRunner uses the regular db
     runner = CliRunner()
-    result = runner.invoke(run,
-                           ['--single_course', 34],
-                            )
+    # opt-out needed for parameter 'cli': see https://youtrack.jetbrains.com/issue/PY-66428
+    # noinspection PyTypeChecker
+    result = runner.invoke(cli, ['--single_course', testcourse_id,])  # dryrun
     assert result.exit_code == 0
     assert bad_ms_url not in result.output
 
 
 def tst_transform_all():
     runner = CliRunner()
-    result = runner.invoke(run,
-#                            ['--single_course', 34],
-                            )
+    # noinspection PyTypeChecker
+    result = runner.invoke(cli)
+    #                            ['--single_course', 34],
+
     assert result.exit_code == 0
     assert bad_ms_url not in result.output

@@ -282,17 +282,19 @@ def overview_documents(rows, canvas_url: str = None):
     webview.start(debug=True)
 
 
-def get_logger(logger_name='canvasrobot'):
+def get_logger(logger_name='canvasrobot',
+               file_level=logging.WARNING,
+               stream_level=logging.INFO):
 
     logger = logging.getLogger("canvasrobot.canvasrobot")
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     file_handler = logging.FileHandler(f"{logger_name}.log")
     file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.WARNING)
+    file_handler.setLevel(file_level)
 
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
-    stream_handler.setLevel(logging.INFO)
+    stream_handler.setLevel(stream_level)
 
     logger.addHandler(file_handler)
     logger.addHandler(stream_handler)

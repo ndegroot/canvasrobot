@@ -327,8 +327,8 @@ class CanvasRobot(object):
         try:
             self.canvas = canvasapi.Canvas(config.url, config.api_key)
             self.canvas_url = config.url
-        except (canvasapi.exceptions.Forbidden, ConnectionError):
-            self.console.log("login Canvas failed (Forbidden) Wrong API key?")
+        except (canvasapi.exceptions.Forbidden, ConnectionError) as e:
+            self.console.log(f"login Canvas failed ({e}) Connection trouble or wrong API key?")
             self.canvas_login = False
         else:
             if not self.canvas:
@@ -1417,7 +1417,14 @@ class CanvasRobot(object):
         db(qry).update(**ud_fields)
         db.commit()
 
-    def update_db_for(self, course, single_course=None):
+    def update_db_for(self, course, single_course=None, minimal=False):
+        """
+
+        :param course:
+        :param single_course:
+        :param minimal: only crate / update course core data
+        :return:
+        """
 
         def count_students(course):
             # students
@@ -1428,8 +1435,10 @@ class CanvasRobot(object):
             return nr_students
         db = self.db
         logger.debug("course: {}".format(course.name))
+
         # students
         nr_students = count_students(course)
+
         # ud teachers
         teacher_logins, teacher_names, teachers_ids = self.update_db_teachers(course)
 
@@ -1478,6 +1487,8 @@ class CanvasRobot(object):
 
         db.commit()
 
+        return c_id  # course id in db for new of existing course
+
     def update_db_course(self, course, creation_date, md, nr_students, teacher_logins, teacher_names):
         # update table course
         db = self.db
@@ -1510,7 +1521,7 @@ class CanvasRobot(object):
             raise
         return course_id
 
-    def update_db_teachers(self, course):
+    def update_db_teachers(self, course) -> Tuple[list[str], list[str], list[int]]:
         db = self.db
         teachers = course.get_users(enrollment={'type': 'TeacherEnrollment'})
         teachers_ids = []
@@ -1529,9 +1540,9 @@ class CanvasRobot(object):
                                                    username=teacher.login_id,
                                                    email=teacher.email,
                                                    role='T')
-            teachers_ids.append(inserted_id or
-                                db(db.user.username ==
-                                   teacher.login_id).select().first().id)
+            inserted_id = inserted_id or db(db.user.username ==
+                                            teacher.login_id).select().first().id
+            teachers_ids.append(inserted_id)
         teacher_logins, teacher_names = [], []
         try:
             # skips teachers with non-accepted invites

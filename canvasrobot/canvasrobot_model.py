@@ -285,6 +285,28 @@ class LocalDAL(DAL):
                           # safe upload of files, keeps filenames
                           Field('file', 'upload'),
                           migrate=True)
+
+        self.define_table('course_urltransform',
+                          Field('dryrun','boolean'),
+                          Field('course_id', 'integer'),
+                          Field('course_code', 'string'),
+                          Field('sis_code', 'string'),
+                          Field('name', 'string'),
+                          Field('teacher_logins', 'list:string'),  # as usernames
+                          Field('teacher_names', 'list:string'),
+                          Field('status', 'integer'),
+                          Field('nr_pages', 'integer'),
+                          Field('nr_module_items', 'integer'),
+                          Field('nr_assignments', 'integer'),
+                          Field('nr_quizzes', 'integer'),
+                          Field('nr_files', 'integer'),
+                          Field('page_titles', 'list:string'),
+                          Field('page_urls', 'list:string'),
+                          Field('module_items', 'list:integer'),
+                          singular='Course Url transform',
+                          plural='Course Url transforms',
+                          format='%(name)s[%(teacher_names)s]')
+
         if is_testing:
             self.truncate_all_tables()
 
