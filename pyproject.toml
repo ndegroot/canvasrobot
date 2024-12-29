@@ -1,6 +1,6 @@
 [project]
 name = "canvasrobot"
-version = "0.8.25"
+version = "0.8.26"
 description = "Library which uses Canvasapi (see https://canvasapi.readthedocs.io) to provide a CanvasRobot class."
 readme = "README.md"
 authors = [
