@@ -38,8 +38,10 @@ def cr():
 def tr():
     """ Fixture to set up the test database with test data """
     try:
-
-        tr = UrlTransformationRobot(is_testing=True)
+        # while testing we use the 'databases' folder in the root of project
+        db_folder = pathlib.Path.cwd().parent / "databases"
+        tr = UrlTransformationRobot(is_testing=True,
+                                    db_folder=db_folder)
     except urllib3.connectionpool.MaxRetryError:
         print("No connection")
     # do something to initialise

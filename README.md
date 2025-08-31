@@ -1,16 +1,35 @@
 # CanvasRobot
 Library which uses
 [Canvasapi](https://canvasapi.readthedocs.io/en/stable/getting-started.html)
-(patched to allow better user search)
-to provide a CanvasRobot class for GUI and commandline use (Rich)
+(minimally patched to allow more flexible user search)
+to provide a CanvasRobot class for GUI and commandline use.
+You can install canvasrobot and urltransform (special edition 
+to translate video urls in Canvas pages) 
+using [UV](https://docs.astral.sh/uv/getting-started/installation/)
+Tip: use `brew` to install on macOS and `winget` on Windows. Check if the 
+path is correct, after reopening terminal/Powershell
+
+``` commandline
+uv tool install canvasrobot
+
+canvasrobot --help
+urltransform --help
+```
+
 ## Uses 
-[CanvasAPI](https://canvasapi.readthedocs.io/en/stable/getting-started.html)
+- [CanvasAPI](https://canvasapi.readthedocs.io/en/stable/getting-started.html) 
+- rich
+- rich_click
+- keyring (safe store of api token)
+- pydal (local database)
+- pywebview (HTML reporting)
+- [opt] pymemcache (install to add caching canvas interaction)
+
 ## Used 
 In word2quiz library.
+(Not yet ready for general use...)
 
-Not yet ready for general use...
-
-## Examples:
+## Examples
 ```Python
 import rich
 import canvasrobot as cr
