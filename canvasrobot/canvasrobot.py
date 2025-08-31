@@ -6,17 +6,17 @@ import mimetypes
 import os
 import re
 from collections import namedtuple
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import pytz
 import logging
 import binascii
 
-from result import Ok, Err, Result, is_ok, is_err
+from result import Ok, Err, Result
 import attrs
 from attrs import define, asdict
 import canvasapi  # type: ignore
 import requests
-from openpyxl.styles.builtins import total
+# from openpyxl.styles.builtins import total
 
 # from functools import lru_cache
 try:  # type: ignore
@@ -173,7 +173,7 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
         - pages
         - assignments
         - submissions
-        :returns course metadata object
+        :returns a course metadata object
         """
         course = canvas.get_course(course_id)
         modules = course.get_modules()
@@ -253,7 +253,7 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
             examinations_summary += (f"\nTotal: {examination_files} "
                                      f"examination files ") if examination_files \
                 else "No examination files"
-        # was this working earlier 2.2.0 ?
+        # was this working earlier in 2.2.0?
         # try:
         #    collaborations = course.get_collaborations()
         #    list_of_cols = [c for c in collaborations]
@@ -342,7 +342,7 @@ class CanvasRobot(object):
             self.last_db_update = utc_timezone.localize(self.last_db_update).astimezone(utc_timezone)
         try:
             delta = now - self.last_db_update
-        except (TypeError, Exception) as e:
+        except (TypeError, Exception):
             pass
         else:
             if delta.days > 3 or db_update:
@@ -419,11 +419,11 @@ class CanvasRobot(object):
                                by_teachers: Optional[list] = None,
                                this_year=True):
         """
-        get all courses from canvas in account.
+        get all courses from canvas in an account.
 
         :param by_teachers: list of teacher id's
         :param this_year: True=filter courses to include only the current year
-        :returns list of courses
+        :returns a list of courses
         """
         console=self.console
         assert self.admin, "No (sub) admin account provided"
@@ -465,7 +465,7 @@ class CanvasRobot(object):
         return md_result
 
     def get_all_active_courses(self, from_db=True):
-        """:returns list of all canvas courses for this subadmin account"""
+        """:returns a list of all canvas courses for this subadmin account"""
 
         def cur_year_active(course):
             """ filter function"""
@@ -484,16 +484,17 @@ class CanvasRobot(object):
             courses = list(courses)
         return courses
 
-    def get_course_using_osiris_id(self, osiris_id):
+    def get_course_using_osiris_id(self, osiris_id) -> Optional[Course]:
         """
         :returns first TST course with sisid starting with
-        osiris_id in selected  year"""
+        osiris_id in selected year"""
         for course in self.admin.get_courses():
             # only consider course if selected year
             if str(course.sis_course_id)[:4] != str(self.year):
                 continue
             if course.course_code.startswith(osiris_id):
                 return course
+        return None
 
     def get_course_id_using_osiris_id_from_db(self, osiris_id: str):
         db = self.db
@@ -539,7 +540,7 @@ class CanvasRobot(object):
     @staticmethod
     def create_profile(profile_dict):
         """
-        based on :profile_dict
+        based on profile_dict
         :returns Canvas profile or TypeError
         """
         try:
@@ -561,7 +562,7 @@ class CanvasRobot(object):
 
     def is_teacher_canvas(self, user):
         """
-        check if user is a teacher in one of the TST courses by checking
+        check if a user is a teacher in one of the TST courses by checking
         the canvas courses.
         :param user
         """
@@ -594,7 +595,7 @@ class CanvasRobot(object):
         """
         :param search_name:
         :param email to search on email
-        try search name as a login, then the email if supplied otherwise use
+        try search name as a login, then the email if supplied.
         """
         try:
             user = self.canvas.get_user(search_name, 'sis_login_id')
@@ -620,7 +621,7 @@ class CanvasRobot(object):
     @staticmethod
     def get_students_dibsa(c_name, local=True):
         """get list of students from (local) DIBSA CRM"""
-        # idea:  use LDAP instead
+        # idea: use LDAP instead
         url = (f"{'http://127.0.0.1:8000' if local else 'https://webapp.fkt.uvt.nl/'}"
                f"/dibsa/service/call/json/students/{c_name}")
         try:
@@ -645,9 +646,9 @@ class CanvasRobot(object):
         """given
         :param local: get student dat from local Dibsa if True
         :param c_id community id
-        lookup the list of educations (at least one item)
+        look up the list of educations (at least one item)
         retrieve the students from local dibsa/ldap
-        for each student lookup canvas user and build list of canvas
+        for each student look up canvas user and build a list of canvas
         user (student)
         :returns dict  with as key the edu_id list of Canvas students"""
 
@@ -711,10 +712,10 @@ class CanvasRobot(object):
                          username: str = "",
                          enrollment=None) -> Result[User, str]:
         """
-        search course on osiris_id with enroll using username (more robust,
+        search course on osiris_id with an enroll using username (more robust,
         using osiris_id if needed)
 
-        :param search: if given get course using osiris_id
+        :param search:using osiris_id if present
         :param course_id: course_id
         :param section_id: enroll in section if provided
         :param username:
@@ -772,7 +773,7 @@ class CanvasRobot(object):
 
     def enroll_user_in_course(self, user, course, role):
         """
-        enroll (valid) user in course with role
+        enroll (valid) user in course with given role
         :param user:
         :param course:
         :param role:
@@ -833,7 +834,7 @@ class CanvasRobot(object):
 
                         # self.enroll_user_in_course(student, course, role=role_student)
 
-            for edu, combi in students_dict.items():
+            for edu, combi in combi_dict.items():
                 students, _ = combi
                 for student in students:
                     if lookup_sections and edu in lookup_sections:
@@ -842,7 +843,7 @@ class CanvasRobot(object):
                     else:
                         self.enroll_user_in_course(student, course, role=role_student)
 
-    def add_observer_to_education(self, user, report_only=False):
+    def add_observer_to_education(self, user, edu_id, report_only=False):
         """ add user as an observer to all courses of an education"""
         # todo: select courses using membership of education using osiris ids
         # not working just showing
@@ -862,7 +863,7 @@ class CanvasRobot(object):
                 print(observer.name)
 
     def remove_observer_from_all_courses(self, username):
-        """ remove user as an observer from all TST courses"""
+        """ remove a user as an observer from all TST courses"""
         removed = []
         try:
             user = self.canvas.get_user(username, 'sis_login_id')
@@ -885,7 +886,7 @@ class CanvasRobot(object):
         return removed
 
     def import_courses(self, filename):
-        """from csv file updates table Course and Teacher
+        """from the csv file updates table Course and Teacher
         :param filename: filename csv file
         """
 
@@ -946,7 +947,7 @@ class CanvasRobot(object):
     # # Old Blackboard interactions
     # def execute_command(self, command, params=None):
     #     """
-    #     not in use ?
+    #     not in use?
     #     :param command: command to execute
     #     :param params: parameters to tune command
     #     """
@@ -1031,7 +1032,7 @@ class CanvasRobot(object):
     #     :param single_course: used for testing
     #     :return: rows/list of dicts """
     #
-    #     db = self.db  # cosmetic reasons
+    #     db = self.db # cosmetic reasons
     #     suffix = '-{}-'.format(self.year)
     #     qry = db.bbcourse.course_suffix.contains(suffix)
     #     if single_course:
@@ -1101,7 +1102,7 @@ class CanvasRobot(object):
 
     def update_documents(self, files):
         """ insert file object properties (fname, url) in table bbdocument
-        :param files: list of file objects ( containing fname, url)
+        :param files: list of file objects (containing fname, url)
         """
         db = self.db
         for c_file in files:
@@ -1130,7 +1131,7 @@ class CanvasRobot(object):
                 db.commit()
 
     def get_list_of_documents(self):
-        """ get documents/attachments from db als a list
+        """ get documents/attachments from db as a list
         """
         db = self.db
         suffix = '-{}-'.format(self.year)
@@ -1210,11 +1211,11 @@ class CanvasRobot(object):
                                     target: str,
                                     dryrun=False) -> Tuple[int, str]:
         """
-        In a course replace text (or html) in all pages
+        In a course replace text (or HTML) in all pages
         :param course_id: canvas course_id
         :param source: text te find
         :param target: text to replace with
-        :param dryrun: True: don't update just return marked body
+        :param dryrun: True: don't update but return marked body
         :return:
         """
         total_count = 0
