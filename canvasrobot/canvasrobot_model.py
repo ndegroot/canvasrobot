@@ -126,8 +126,14 @@ SHORTNAMES = dict(
 STUDADMIN = ('rsackman',
              'smvries')
 
+ENROLLMENT_TYPES = dict(student='StudentEnrollment',
+                        teacher='TeacherEnrollment',
+                        observer='ObserverEnrollment',
+                        teachingassistant='TeachingAssistantEnrollment')
+
+
 now = datetime.now()
-# July first is considered the end of educational season
+# July first is considered the end of the educational season
 AC_YEAR = now.year - 1 if now.month < 8 else now.year
 LAST_YEAR = '-{0}-{1}'.format(AC_YEAR - 1, AC_YEAR)
 THIS_YEAR = '-{0}-{1}'.format(AC_YEAR, AC_YEAR + 1)
