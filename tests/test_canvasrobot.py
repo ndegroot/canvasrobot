@@ -1,9 +1,9 @@
-import mock
+
 import builtins
 import pytest
-import webview
+# import webview
 from canvasrobot.canvasrobot import Course2Foldername
-
+from attrs import define
 """
 1. note that this is real live testing when interfacing with Canvas
 2. please adjust the 4 constants below, 
@@ -17,10 +17,19 @@ from canvasrobot.canvasrobot import Course2Foldername
 """
 
 
+@define
+class TeacherDTO:
+    sortable_name: str
+
+
+@define
+class UserInfo:
+    id:int
+
 ADMIN_ID = 6  # If no admin_id available: set to 0
 A_TEACHER_ID = 8  # choose a teacher/teacher_id from Canvas
-NR_COURSES_TEACHER = 8  # lookup number of courses for this teacher
-NR_COURSES_ADMIN = 178  # lookup using canvas website
+NR_COURSES_TEACHER = 47  # lookup number of courses for this teacher
+NR_COURSES_ADMIN = 179  # lookup using canvas website
 TEST_COURSE = 34  # first create this test course in Canvas
 TEST_COURSE_NR_ASSIGNMENTS = 8  # check if there are this number of assignments
 TEST_COURSE_NR_EXAMINATIONS = 3  # make sure there are this many files in folder Tentamens
@@ -29,11 +38,34 @@ TEST_COURSE_NR_EXAMINATIONS = 3  # make sure there are this many files in folder
 # - and at least one file in folder 'Tentamens' in Files
 
 
-def tst_init(cr):
+def tst_init(cr, mock):
     """ something with capture"""
     inputs = iter(['https://tilburguniversity.instructure.com', 'a key', 8])
     with mock.patch.object(builtins, 'input', lambda _: next(inputs)):
         assert cr
+
+
+@pytest.mark.parametrize("user_info, expected_result", [
+    (UserInfo(30), True),  # Pas aan met de correcte verwachte resultaten.
+    (UserInfo(37), True),  # Voeg correcte cases toe op basis van je methode-logica.
+    (UserInfo(48), True),
+    (UserInfo(135226), True),
+])
+def test_is_user_valid(tr, user_info, expected_result):
+    """
+    Test the 'is_user_valid' method CanvasRobot
+    """
+    result, reason = tr.is_user_valid(user_info)
+
+    assert result == expected_result, f"Fout bij user_id {user_info.id}: verwacht {expected_result}, kreeg {result}"
+
+
+def test_parse_sortable_name(cr):
+    teacher = TeacherDTO("G'root, Nico de")
+    firstname, prefix, lastname = cr.parse_sortable_name(teacher)
+    assert firstname == "Nico"
+    assert prefix == "de"
+    assert lastname == "G'root"
 
 
 def test_getcourses_current_teacher(cr):
@@ -128,7 +160,7 @@ def test_outliner_foldernames(cr):
 
 def test_search_replace(cr):
     """check if course_search_replace function works"""
-    db = cr.db
+    # db = cr.db
     course = cr.get_course(TEST_COURSE)
     pages = course.get_pages(include=['body'])
     search_text, replace_text = ' je', ' u'

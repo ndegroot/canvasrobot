@@ -164,3 +164,10 @@ cython_debug/
 #.idea/
 
 /.ruff_cache/
+/tests/admin20.html
+/tests/admin20.xlsx
+/tests/last_report.html
+/tests/~$output.xlsx
+/admin20.html
+/admin20.xlsx
+/last_report.html

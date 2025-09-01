@@ -12,6 +12,21 @@ from canvasrobot import CanvasRobot
 from urltransform import UrlTransformationRobot
 
 # from pymemcache.client import base
+page_html = """<div><span>Pagina om de vervanging te testen van Mediasite URLs door de vervangende Panopto URLs. 
+Dat gaat tot 3 februari 2025 via de redirect server.<br /></span><span><br />
+Kandidaat voor vervanging in een link: <span> 
+<a href="https://videocollege.uvt.nl/Mediasite/Play/ce152c1602144b80bad5a222b7d4cc731d">link mediasite</a> </span></span></div>
+<div>Kandidaat in iframe</div>
+<p><iframe title="TheOnline-Preambule 2" 
+src="https://videocollege.uvt.nl/Mediasite/Play/009e033f47cc4330ba2e4c3a0deecd461d" 
+width="900" height="600" allowfullscreen="allowfullscreen" allow="fullscreen"></iframe></p>
+<p>&nbsp;</p>
+<div><span>Link met URL die niet vervangen hoeft te worden:<br /><span>
+<a href="https://tilburguniversity.cloud.panopto.eu/Panopto/Pages/Viewer.aspx?id=221a5d47-84ea-44e1-b826-af52017be85c">
+panoptolink</a><br /></span> <span><br /></span> 
+<span>Nu een link met id die niet bestaat in de datatabel:<br />
+https://videocollege.uvt.nl/Mediasite/Play/ce152c1602144b80bad5a222b7d4cc731 <br />
+</span><span>Dat is dus niet goed, zou gerapporteerd moeten worden.</span><span><br /></span></span></div>"""
 
 
 def dropdb(thedb):
@@ -22,7 +37,7 @@ def dropdb(thedb):
 
 @pytest.fixture(scope='session')
 def cr():
-    """ Fixture to set up the test database with test data """
+    """ Fixture to set up the canvasrobot """
     try:
         cr = CanvasRobot(is_testing=True)
     except urllib3.connectionpool.MaxRetryError:
@@ -36,7 +51,7 @@ def cr():
 
 @pytest.fixture(scope='session')
 def tr():
-    """ Fixture to set up the test database with test data """
+    """ Fixture to set up the UrlTranformationRobot"""
     try:
         # while testing we use the 'databases' folder in the root of project
         db_folder = pathlib.Path.cwd().parent / "databases"

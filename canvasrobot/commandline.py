@@ -1,19 +1,17 @@
-from result import is_ok, is_err, Result
-import rich
-from rich.prompt import Prompt
 import rich_click as click
 
-from .commandline_model import (get_logger,
-                                CanvasRobot,
+from .canvasrobot import CanvasRobot
+from .commandline_model import (get_logger,  # noqa: F401
                                 create_db_folder,
                                 enroll_student,
                                 search_in_course,
                                 search_in_courses,
                                 search_replace_pages,
-                                search_replace_show,
+                                # search_replace_show,
                                 show_search_result,
                                 overview_courses,
                                 overview_documents,
+                                SHORTNAMES,
                                 )
 
 
@@ -72,10 +70,32 @@ def show():
     pass
 
 
+choices = SHORTNAMES.keys()
+
+
 @click.command("student")
+@click.option("--username",
+              "-u",
+              help="student's username",
+              prompt=True)
+@click.option("--shortcoursename",
+              "-s",
+              help="short course name",
+              type=click.Choice(choices, case_sensitive=False),
+              prompt=True,
+              )
+@click.option("--unenroll",
+              help="unenroll student",
+              is_flag=True,
+              default=False,)
 @click.pass_obj
-def student(robot):
-    enroll_student(robot)
+def student(robot, username, shortcoursename: str = None, unenroll: bool = False,):
+    if not username:
+        click.echo("Needs username")
+    enroll_student(robot,
+                   username=username,
+                   shortname=shortcoursename,
+                   unenroll=unenroll,)
 
 
 @click.command("enroll_students_in_communities")
@@ -86,15 +106,25 @@ def students_in_communities(robot):
 
 
 @click.command()
+@click.option("--dryrun/--go",
+              help="Do not change anything",
+              is_flag=True,
+              default=False,)
 @click.pass_obj
-def in_course(robot):
-    search_in_course(robot)
+def in_course(robot, dryrun):
+    count, pages, _ = search_in_course(robot, dryrun=dryrun)
+    click.echo(f"{count} locations in {len(pages)} pages")
 
 
 @click.command()
+@click.option("--dryrun/--go",
+              help="Do not change anything",
+              is_flag=True,
+              default=False,)
 @click.pass_obj
-def in_courses(robot):
-    search_in_courses(robot)
+def in_courses(robot, dryrun):
+    count, pages, _ = search_in_courses(robot, dryrun=dryrun)
+    click.echo(f"{count} locations in {len(pages)} pages")
     # overview_courses(courses, robot.canvas_url)
 
 

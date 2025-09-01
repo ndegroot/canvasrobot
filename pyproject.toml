@@ -1,6 +1,6 @@
 [project]
 name = "canvasrobot"
-version = "0.8.26"
+version = "0.9.1"
 description = "Library which uses Canvasapi (see https://canvasapi.readthedocs.io) to provide a CanvasRobot class."
 readme = "README.md"
 authors = [
@@ -23,6 +23,11 @@ dependencies = [
     "rich-click>=1.8.4",
     "pyyaml>=6.0.2",
     "ftfy>=6.3.1",
+    "bs4>=0.0.2",
+    "lxml>=5.3.0",
+    "scrapy>=2.12.0",
+    "pytest-mock>=3.14.0",
+    "mock>=5.1.0",
 ]
 
 [project.scripts]
@@ -57,14 +62,10 @@ post_commit_hooks = []
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-#[build-system]
-#requires = ["setuptools >= 61.0"]
-#build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
     "pytest>=8.3.1",
- #   "mock",
     "pylint>=3.3.2",
     "ruff>=0.8.2",
     "pymemcache>=4.0.0",

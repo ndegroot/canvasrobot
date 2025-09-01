@@ -2,15 +2,12 @@ import logging
 import sys
 import shutil
 from pathlib import Path
-from typing import Type
-from result import is_ok, is_err, Result
-import rich
+from result import is_ok, is_err, Result  # noqa: F401
 from rich.prompt import Prompt
-import rich_click as click
 import webview
-import webview.menu as wm
+# import webview.menu as wm
 
-from canvasrobot import CanvasRobot, SHORTNAMES
+from canvasrobot import SHORTNAMES
 
 
 class DatabaseLocationError(Exception):
@@ -43,31 +40,36 @@ def create_db_folder():
         return path
 
 
-def search_replace_show(cr):
-    """ check course_search_replace function dryrun, show"""
+TEST_COURSE = 34
+
+
+def search_replace_show_testcourse(cr):
+    """ to check course_search_replace function dryrun, show"""
     course = cr.get_course(TEST_COURSE)
     pages = course.get_pages(include=['body'])
-    search_text, replace_text = ' je', ' u'
+    search_term, replace_term = ' je', ' u'
     page_found_url = ""
     dryrun = True
     for page in pages:
-        if search_text in page.body:
+        if search_term.lower() in page.body.lower():
             page_found_url = page.url  # remember
-            count, replaced_body = cr.search_replace_in_page(page, search_text, replace_text,
+            count, replaced_body = cr.search_replace_in_page(page,
+                                                             search_term=search_term,
+                                                             replace_term=replace_term,
                                                              dryrun=dryrun)
             # We only need one page to test this
             if dryrun:
-                show_search_result(count, [], html)
+                show_search_result(count=count, search_term=search_term, marked_or_changed_bodies=replaced_body)
             break
 
     if page_found_url:
         if not dryrun:
             # read again from canvas instance to check
             page = course.get_page(page_found_url)
-            assert search_text not in page.body
-            assert replace_text in page.body
+            assert search_term not in page.body
+            assert replace_term in page.body
     else:
-        assert False, f"Source string '{search_text}' not found in any page of course {TEST_COURSE}"
+        assert False, f"Source string '{search_term}' not found in any page of course {TEST_COURSE}"
 
 
 class WebviewApi:
@@ -101,10 +103,22 @@ def do_nothing():
     pass
 
 
-def show_search_result(count: int, found_pages: list, html: str, canvas_url: str = None):
-    """in webview show result for search-replace with links"""
+def show_search_result(count: int = 0,
+                       search_term: str = "",
+                       found_pages: list = None,
+                       marked_or_changed_bodies: str = "",
+                       canvas_url: str = None):
+    """in webview show result for search or replace with links
+    show
+    - count of search locations
+    - list of pages with page-links"""
 
-    template = """
+    page_links = [(f"<li><a href='{canvas_url}/courses/{course_id}/pages/{url}' "
+                   f"target='_blank'>{title} in {course_name}"
+                   f"</a></li>") for course_id, course_name, url, title in found_pages]
+    page_list = f"<ul>{''.join(page_links)}</ul>"
+
+    report = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -112,24 +126,19 @@ def show_search_result(count: int, found_pages: list, html: str, canvas_url: str
       
     </head>
     <body>
-      <p>In <span style='color: red;' >red</span> below the {} found locations in </p>
-      {}
-      <button onclick='pywebview.api.close()'>Klaar</button>
+      <p>Below the {count} found and marked (>{search_term}<) locations in the pages:</p>
+      {page_list}
+      <button onclick='pywebview.api.close()'> Close </button>
       <hr/>
-      {}  
+      {marked_or_changed_bodies}  
     </body>
     </html>
     """
     # https://tilburguniversity.instructure.com/courses/34/wiki
 
-    page_links = [(f"<li><a href='{canvas_url}/courses/{course_id}/pages/{url}' target='_blank'>{title} in {course_name}"
-                   f"</a></li>") for course_id, course_name, url, title in found_pages]
-    page_list = f"<ul>{''.join(page_links)}</ul>"
-    added_button = template.format(count, page_list, html)
-
     api = WebviewApi()
-    win = webview.create_window(title="Preview (click button to close)",
-                                html=added_button,
+    win = webview.create_window(title="Preview (click [Close] button to close)",
+                                html=report,
                                 js_api=api)
     api.set_window(win)
 #     menu_items = [wm.Menu('Test Menu',
@@ -148,13 +157,24 @@ def show_search_result(count: int, found_pages: list, html: str, canvas_url: str
 #                           [wm.MenuAction('This will do nothing', do_nothing)]
 #                           ),
 #                  ]
-    webview.start()
+    webview.settings = {
+        'ALLOW_DOWNLOADS': False,  # Allow file downloads
+        'ALLOW_FILE_URLS': True,  # Allow access to file:// urls
+        'OPEN_EXTERNAL_LINKS_IN_BROWSER': True,  # Open target=_blank links in an external browser
+        'OPEN_DEVTOOLS_IN_DEBUG': True,  # Automatically open devtools when `start(debug=True)`.
+    }
+    webview.start(debug=True)
 
 
 def overview_courses(courses, canvas_url: str = None):
-    """in webview show list of course with ids and links"""
+    """in webview show list of courses with ids and links"""
 
-    template = """
+    course_links = [(f"<tr><td>{course.id}</td><td>"
+                     f"<a href='{canvas_url}/courses/{course.id}' "
+                     f"target='_blank'>{course.name}</a></td></tr>") for course in courses]
+    course_list = f"<table class='sortable-theme-bootstrap' data-sortable>{''.join(course_links)}</table>"
+
+    html = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -163,24 +183,19 @@ def overview_courses(courses, canvas_url: str = None):
       <link rel="stylesheet" href="sortable-0.8.0./css/sortable-theme-bootstrap.css" />
     </head>
     <body>
-      <h2>{} courses</h1>
-      <button onclick='pywebview.api.close()'>Klaar</button>
+      <h2>{len(courses)} courses</h1>
+      <button onclick='pywebview.api.close()'> Close </button>
       <hr/>
-      {}
+      {course_list}
     </body>
     </html>
     """
     # format: https://tilburguniversity.instructure.com/courses/34/wiki
-    course_links = [(f"<tr><td>{course.id}</td><td>"
-                     f"<a href='{canvas_url}/courses/{course.id}' "
-                     f"target='_blank'>{course.name}</a></td></tr>") for course in courses]
-    course_list = f"<table class='sortable-theme-bootstrap' data-sortable>{''.join(course_links)}</table>"
-    html = template.format(len(courses), course_list)
 
     api = WebviewApi()
     win = webview.create_window(
                                 # "index.html",
-                                title="Preview (click button to close)",
+                                title="Preview (click [Close] button to close)",
                                 html=html,
                                 js_api=api)
     api.set_window(win)
@@ -267,6 +282,7 @@ def overview_documents(rows, canvas_url: str = None):
                   f"<a href='{canvas_url}/courses/{row.course.course_id}' "
                   f"target='_blank'>{row.course.name}</a></td>"
                   f"</tr>") for row in rows]
+
     doc_list = f"<table class='files sortable-theme-bootstrap data-sortable'>{''.join(doc_links)}</table>"
     html = template.format(len(rows), doc_list)
 
@@ -303,50 +319,78 @@ def get_logger(logger_name='canvasrobot',
 
 
 # commands
-def enroll_student(robot):
+def enroll_student(robot, username, shortname, unenroll=False,):
     """
     Enroll a student in a predetermined course.
     This function uses placeholder values for demonstration.
     """
     course_url = robot.canvas_url+"/courses/{}"
-    login = 'student_login'  # Placeholder for user login name
-    choice = 'course_choice'  # Placeholder for course choice
-    course_id = SHORTNAMES.get(choice, None)
+    course_id = SHORTNAMES.get(shortname, None)
 
     if not course_id:
-        robot.console.print(f"Course '{choice}' not found in SHORTNAMES.")
+        robot.console.print(f"Course '{shortname}' not found in SHORTNAMES.")
         return
+
+    if unenroll:
+        result = robot.unenroll_in_course(
+            course_id,
+            username,
+            enrollment={}
+        )
+        if is_ok(result):
+            href = course_url.format(course_id)
+            robot.console.print(
+                f"'{username} is verwijderd als student aan de cursus '{shortname}' link: {href}")
+        else:
+            robot.console.print(
+                f"'{result.value.name} is NIET verwijderd als student aan de cursus '{shortname}'")
+        return result
 
     result = robot.enroll_in_course(
             course_id=course_id,
-            username=login,
+            username=username,
             enrollment={})
 
     if is_ok(result):
         href = course_url.format(course_id)
-        robot.console.print(f"{result.value.name} toegevoegd aan de cursus '{choice}' link: {href}")
+        robot.console.print(f"'{username} is toegevoegd als student aan de cursus '{shortname}' link: {href}")
     if is_err(result):
-        robot.console.print(f"Fout: '{result.value}', '{login}' is niet toegevoegd aan '{choice}'")
+        robot.console.print(f"'{result.value}': "
+                            f"'{username}' is niet toegevoegd aan '{shortname}'")
 
 
-def search_in_course(robot, single_course=0):
-    """cmdline: ask for search and replace term. Scope one course all pages"""
+def search_in_course(robot, single_course=0, dryrun=True, ignore_case=True):
+    """cmdline: ask for search and replace term. Scope: one course, all pages"""
     robot.console.print("Zoek tekstfragment in een cursus")
     search_only = Prompt.ask("Alleen zoeken?",
                              choices=["zoek", "vervang"],
                              default="zoek",
                              show_default=True)
     search_only = True if search_only == "zoek" else False
-    search_term = Prompt.ask("Voer de zoekterm in")
+    while True:
+        search_term = Prompt.ask("Voer de zoekterm in")
+        if len(search_term) > 1:
+            break
+        robot.console.print("Voer een langere zoekterm in")
     replace_term = Prompt.ask("Voer vervangterm in") if not search_only else ""
     course_id = Prompt.ask("Voer de course_id in") if single_course == 0 else single_course
     robot.console.print('Zoeken..')
-    count, found_pages, html = robot.course_search_replace_pages(course_id, search_term, replace_term, search_only)
-    show_search_result(count, found_pages, html, robot.canvas_url)
+    count, found_pages, marked_bodies = robot.course_search_replace_pages(course_id,
+                                                                          search_term=search_term,
+                                                                          replace_term=replace_term,
+                                                                          search_only=search_only,
+                                                                          ignore_case=ignore_case,
+                                                                          dryrun=dryrun)
+    show_search_result(count=count,
+                       search_term=search_term,
+                       found_pages=found_pages,
+                       marked_or_changed_bodies=marked_bodies,
+                       canvas_url=robot.canvas_url)
+    return count, found_pages, marked_bodies
 
 
-def search_in_courses(robot):
-    """cmdline: ask for search and replace term. Scope: all courses"""
+def search_in_courses(robot, dryrun=True, ignore_case=True):
+    """cmdline: ask for search and replace term. Scope: all courses, all pages"""
     robot.console.print("Zoek tekstfragment in alle cursussen")
     search_only = Prompt.ask("Alleen zoeken?",
                              choices=["zoek", "vervang"],
@@ -356,8 +400,17 @@ def search_in_courses(robot):
     search_term = Prompt.ask("Voer de zoekterm in")
     replace_term = Prompt.ask("Voer vervangterm in") if not search_only else ""
     robot.console.print('Zoeken..')
-    count, found_pages, html = robot.course_search_replace_pages_all_courses(search_term, replace_term, search_only)
-    show_search_result(count, found_pages, html, robot.canvas_url)
+    count, found_pages, marked_bodies = robot.course_search_replace_pages_all_courses(search_term=search_term,
+                                                                                      replace_term=replace_term,
+                                                                                      search_only=search_only,
+                                                                                      ignore_case=ignore_case,
+                                                                                      dryrun=dryrun)
+    show_search_result(count=count,
+                       search_term=search_term,
+                       found_pages=found_pages,
+                       marked_or_changed_bodies=marked_bodies,
+                       canvas_url=robot.canvas_url)
+    return count, found_pages, marked_bodies
 
 
 def search_replace_pages(robot, single_course=0):
@@ -371,5 +424,12 @@ def search_replace_pages(robot, single_course=0):
     search_term = Prompt.ask("Voer de zoekterm in")
     replace_term = Prompt.ask("Voer vervangterm in") if not search_only else ""
     course_id = Prompt.ask("Voer de course_id in") if single_course == 0 else single_course
-    count, found_pages, html = robot.course_search_replace_pages(course_id, search_term, replace_term, search_only)
-    show_search_result(count, found_pages, html, robot.canvas_url)
+    count, found_pages, html = robot.course_search_replace_pages(course_id,
+                                                                 search_term,
+                                                                 replace_term,
+                                                                 search_only)
+    show_search_result(count=count,
+                       search_term=search_term,
+                       found_pages=found_pages,
+                       marked_or_changed_bodies=html,
+                       canvas_url=robot.canvas_url)

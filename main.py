@@ -1,13 +1,16 @@
-import os
-from canvasrobot import CanvasRobot, show_search_result, search_replace_show
-from canvasrobot.commandline import enroll_student, search_replace_pages
+# from pygments.lexer import include
+from canvasrobot import  scan_replace_urls
+from canvasrobot import CanvasRobot, UrlTransformationRobot, show_search_result  # , search_replace_show
+from canvasrobot.commandline import enroll_student, search_replace_pages, create_db_folder
 TEST_COURSE = 34  # first create this test course in Canvas
 
 
 def run():
-    robot = CanvasRobot(reset_api_keys=False,
-                        db_force_update=False)
-
+    # robot = CanvasRobot(reset_api_keys=False,
+    #                     db_force_update=False)
+    path = create_db_folder()
+    robot = UrlTransformationRobot(db_force_update=False,
+                                   db_folder=path)
     # robot.update_database_from_canvas()
     # result = robot.get_students_dibsa('PM_MACS', local=False)
     # result = robot.search_user('u144466', 'A.J.D.Hendriks@tilburguniversity.edu')
@@ -19,9 +22,17 @@ def run():
     # courses = robot.get_courses_in_account()
     # search_replace_pages(robot)
 
-    course = robot.get_course(TEST_COURSE)
-    robot.update_db_for(course)
+    # course = robot.get_course(TEST_COURSE)
+    # result = robot.update_db_for(course)
+    #course_ids = robot.scrape_all_courses(admin_id=20)
+    # user 33 is brand
+    #user_8 = robot.get_user(8, include=['profile'])
+    #user_33 = robot.get_user(33, include=['profile'])
     # rows = robot.get_list_of_documents_db(course_id=TEST_COURSE)
+    #channels = user_8.get_communication_channels() # just use get_profile to get primary_email and login attributes
+
+    scan_replace_urls(robot, admin_id=20)
+
     robot.report_errors()
 
 

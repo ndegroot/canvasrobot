@@ -1,24 +1,28 @@
-import sys
-from typing import Tuple, Optional, Union, Callable
+from typing import Tuple, Optional, Union, Callable, Any
 import io
 import json
 import mimetypes
+import csv
+from pathlib import Path
 from urllib.parse import unquote_plus
 import os
 import re
 from collections import namedtuple
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timezone
+
+import bs4
+# import click
 import pytz
 import logging
 import binascii
+import rich.prompt
 
-from result import Ok, Err, Result, is_ok, is_err
+from result import Ok, Err, Result, is_ok, is_err  # noqa: F401
 import attrs
 from attrs import define, asdict
-import canvasapi  # type: ignore
+import canvasapi
 import requests
-from openpyxl.styles.builtins import total
+from bs4 import BeautifulSoup, NavigableString
 
 # from functools import lru_cache
 try:  # type: ignore
@@ -33,14 +37,15 @@ except ImportError:
 from rich.progress import track
 from rich.progress import Progress
 from rich.console import Console
-from canvasapi.course import Course  # type: ignore
+from canvasapi.course import Course, Page
 from openpyxl.styles import NamedStyle, Font, PatternFill, Alignment  # type: ignore
 from canvasapi.util import combine_kwargs  # type: ignore
 from openpyxl.utils import get_column_letter  # type: ignore
 from openpyxl.workbook import Workbook  # type: ignore
 from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder
 from socket import gaierror, timeout
-from .canvasrobot_model import (AC_YEAR, NEXT_YEAR,  # type: ignore
+from .canvasrobot_model import (Field,  # noqa: F401
+                                AC_YEAR, NEXT_YEAR,  # type: ignore
                                 EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig,
                                 EXAMINATION_FOLDER, COMMUNITY_EDU_IDS)  # type: ignore
 from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, \
@@ -124,6 +129,11 @@ class Profile:
 
 
 @define
+class CourseDTO:
+    id: int
+
+
+@define
 class Course2Foldername:
     course_id: int
     folder_name: str
@@ -160,9 +170,9 @@ def course_get_folder(course, folder_name: str):
 def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=None) -> CourseMetadata:
     """
     for course get the metadata from memcached if available. return CourseMetadata instance
-    :course_id
-    :canvas                     the canvas api object
-    :ignore_assignment_names
+    :param course_id
+    :param canvas                     the canvas api object
+    :param ignore_assignment_names  list of assignment_names to ignore in/for  the db
     :returns Course metadata instance
     """
     ignore_assignment_names = ignore_assignment_names or []
@@ -187,7 +197,7 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
         nr_ext_urls = 0
         for module in modules:
             module_items = module.get_module_items()
-            item_count_ext_url = filter(lambda i: i.type == "ext_url", module_items)
+            item_count_ext_url = filter(lambda i: i.type == "ExternalUrl", module_items)
             nr_ext_urls += len(list(item_count_ext_url))
             nr_module_items += module.items_count
         pages = course.get_pages()
@@ -211,8 +221,12 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
                 # if show_all else ""
 
             submissions_summary = ""
-            submissions = assignment.get_submissions()
-            # try:
+            try:
+                submissions = list(assignment.get_submissions())
+            except canvasapi.exceptions.Forbidden:
+                submissions = []
+                submissions_summary = "No Access"
+
             for idx, submission in enumerate(submissions, start=1):
                 if assignment.name not in ignore_assignment_names:
                     if submission.submission_type == "online_upload":
@@ -236,6 +250,7 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
                                                 f"{submission.grade} at "
                                                 f"{submission.graded_at}\n")
             assignments_summary += f"\n{submissions_summary}"
+
         nr_assignments = len(list(assignments))
 
         quizzes = course.get_quizzes()
@@ -311,6 +326,8 @@ class CanvasRobot(object):
                  db_auto_update: bool = False,
                  db_force_update: bool = False,
                  fake_migrate_all: bool = False):
+        self.errors: list[str] = []
+        self.actions: list[str] = []
         self.cookies: list = []
         self.browser = None
         self.queue = msg_queue  # for async use in tkinter
@@ -328,18 +345,24 @@ class CanvasRobot(object):
             self.canvas = canvasapi.Canvas(config.url, config.api_key)
             self.canvas_url = config.url
         except (canvasapi.exceptions.Forbidden, ConnectionError) as e:
-            self.console.log(f"login Canvas failed ({e}) Connection trouble or wrong API key?")
+            msg = f"login Canvas failed ({e}) Connection trouble or wrong API key?"
+            self.console.log(msg)
+            self.errors.append(msg)
             self.canvas_login = False
         else:
             if not self.canvas:
-                self.console.log("login Canvas failed")
+                msg = "login Canvas failed"
+                self.console.log(msg)
+                self.errors.append(msg)
                 self.canvas_login = False
         try:
+            self.admin_id = int(config.admin_id)
             self.admin = self.canvas.get_account(config.admin_id) if config.admin_id \
                 else None
         except (canvasapi.exceptions.Forbidden, ConnectionError, Exception) as e:
+            self.admin_id = None
             self.admin = None
-            self.console.log(f"Warning {e} no admin account?")
+            self.console.log(f"Warning {e} no admin account in config or no rights on {config.admin_id}?")
 
         db = self.db
 
@@ -365,8 +388,6 @@ class CanvasRobot(object):
         self.teacher_ids = self.lookup_teachers_db()
 
         self.internal_id = None
-        self.errors: list[str] = []
-        self.actions: list[str] = []
         logger.info("Canvasrobot instance created")
 
     @property
@@ -416,11 +437,12 @@ class CanvasRobot(object):
                 self.console.print(f"{msg}:{value=}" if value else msg)
 
     # COURSES----------------------------------------
-    def get_course(self, course_id: int):
+    def get_course(self, course_id: int, use_sis_id=False, **kwargs):
         """""
+        :param use_sis_id: if true use sis_id to search
         :param course_id
         :returns canvas course by its id"""
-        return self.canvas.get_course(course_id)
+        return self.canvas.get_course(course_id, use_sis_id=use_sis_id, **kwargs)
 
     def get_courses(self, enrollment: dict):
         """"
@@ -431,26 +453,45 @@ class CanvasRobot(object):
 
     def get_courses_in_account(self,
                                by_teachers: Optional[list] = None,
-                               this_year=True):
+                               this_year=True,
+                               admin_id: Optional[int] = None):
         """
         get all courses from canvas in account.
 
         :param by_teachers: list of teacher id's
         :param this_year: True=filter courses to include only the current year
+        :param admin_id: if given use instead of default admin from config
         :returns list of courses
         """
         console = self.console
-        if not self.admin:
-            console.log("No (sub) admin account provided")
-            return []
 
-        console.print("Get all courses, filter on current courses",
+        admin_id = admin_id or self.admin_id
+
+        console.print(f"Get all courses for {admin_id=}, filter on current courses",
                       prefix='[green]‣[/green] ')
         with Progress(console=console) as progress:
             task_count = progress.add_task("[green]Getting all courses...",
                                            total=None)
             filtered_courses = []
-            courses = self.admin.get_courses(by_teachers=by_teachers)
+            admin_id = int(admin_id)
+
+            if admin_id == self.admin.id:  # TST (owner)
+                # admin = self.canvas.get_account(int(admin_id))  # no...
+                courses = self.admin.get_courses(by_subaccounts=[admin_id],
+                                                 include=["term", "teachers"])
+            else:  # includes admin_id = 0, 20, ...
+                courses = self.admin.get_courses(by_subaccounts=[admin_id],
+                                                 by_teachers=by_teachers,
+                                                 include=["term", "teachers"])
+                # no rights note that `course.account_id = 25` for (some of? all of?) the courses  with ids
+                # harvested with admin_id = 20
+
+                if len(list(courses)) == 0:
+                    # use csv file with course_ids instead
+                    console.log(f"No courses found using for admin {admin_id} access through Canvas "
+                                f"(possibly no rights). Using ids from local CSV file instead...")
+                    courses = self.get_courses_admin_csv(admin_id)
+
             total = len(list(courses))
             progress.remove_task(task_count)
 
@@ -458,9 +499,13 @@ class CanvasRobot(object):
                                             total=total)
             for course in courses:
                 progress.update(task_filter,
-                                advance=1)  # Update de voortgangsbalk
+                                advance=1)  # Update progressbar
                 # only show/insert/update course if current year
-                if this_year and (str(course.sis_course_id)[:4] != str(self.year)
+                if not hasattr(course, 'term'):
+                    course = self.canvas.get_course(course.id,
+                                                    by_teachers=by_teachers,
+                                                    include=["term", "teachers"])
+                if this_year and (str(course.term["name"])[:4] != str(self.year)
                                   or course.name.endswith('conclude')):
                     continue
                 filtered_courses.append(course)
@@ -468,6 +513,23 @@ class CanvasRobot(object):
                       prefix='[green]‣[/green] '
                       )
         return filtered_courses
+
+    def get_courses_admin_csv(self, admin_id):
+        # get ids, create scarce list (only course.id attribute), needs local csv file
+        courses = []
+        csv_path = Path(self.db_folder) / f"course_ids_admin{admin_id}.csv"
+        if not csv_path.exists():
+            self.console.log(f" Missing csv file {csv_path} with course_ids, "
+                             f"please use scraping tooled to create it using {admin_id=} as admin_id. .")
+            raise FileNotFoundError(f"Missing for {admin_id=}:{csv_path}")
+
+        with open(csv_path, mode='r') as csv_file:
+            csv_reader = csv.reader(csv_file)
+            next(csv_reader, None)  # skip header
+            for row in csv_reader:
+                course = CourseDTO(int(row[0]))
+                courses.append(course)
+        return courses
 
     def course_metadata(self, course_id, ignore_assignment_names=None):
         """
@@ -535,23 +597,30 @@ class CanvasRobot(object):
             # print("There are {} modules in page".format(len(page)))
         return
 
-    def course_get_pages(self, course_id):
+    def get_course_pages_module_items(self, course_id) -> tuple[Course, list[Page], list[Any]]:
         """
         :param course_id
         :returns all all pages"""
-        course = self.canvas.get_course(course_id)
+        course = self.canvas.get_course(course_id, include=["term", "teachers"])
         pages = course.get_pages(include=['body'])
-        pages = filter(lambda p: p.title[0:3] != 'UVT', pages)  # skip
-        return pages
+        pages = filter(lambda p: p.title[0:3] != 'UVT', pages)  # skip (some) templates ?
+        modules = course.get_modules()
+        module_items = []
+        for module in modules:
+            module_items += module.get_module_items()
+            # nr_ext_urls += len(list(items_count_ext_url))
+            # nr_module_items += module.items_count
+
+        return course, pages, module_items
 
     # USER, ROLES and PROFILE ----------------------------------------
-    def get_user(self, user_id: int):
+    def get_user(self, user_id: int, **kwargs):
         """
         get user using
         :param user_id:
         :returns user
         """
-        return self.canvas.get_user(user_id)
+        return self.canvas.get_user(user_id, **kwargs)
 
     @staticmethod
     def create_profile(profile_dict):
@@ -789,7 +858,7 @@ class CanvasRobot(object):
 
     def enroll_user_in_course(self, user, course, role):
         """
-        enroll (valid) user in course with role
+        enroll identified user in course with role
         :param user:
         :param course:
         :param role:
@@ -850,7 +919,7 @@ class CanvasRobot(object):
 
                         # self.enroll_user_in_course(student, course, role=role_student)
 
-            for edu, combi in students_dict.items():
+            for edu, combi in combi_dict.items():
                 students, _ = combi
                 for student in students:
                     if lookup_sections and edu in lookup_sections:
@@ -900,6 +969,41 @@ class CanvasRobot(object):
                 removed.append(course.name)
 
         return removed
+
+    def unenroll_in_course(self,
+                           course_id: int = 0,
+                           username: str = "",
+                           enrollment=None) -> Result[User, str]:
+        try:
+            course = self.get_course(course_id)
+
+            filter_enrollment = enrollment or {'type': 'StudentEnrollment'}
+
+            user = self.search_user(username)
+
+            enrollments = course.get_enrollments(enrollment=filter_enrollment)
+            # doesn't filter !
+            # specifying user_id is not allowed
+            for enrollment in enrollments:
+                if enrollment.user_id != user.id or enrollment.type != filter_enrollment['type']:
+                    continue
+                # print(enrollment)
+                enrollment.deactivate(task='delete')
+        except (canvasapi.exceptions.BadRequest,
+                canvasapi.exceptions.Conflict) as e:
+            msg = f'User {username} not removed to {course_id}: {e}'
+            self.errors.append(msg)
+            return Err(msg)
+        else:
+            self.actions.append(f"{username} removed from {course_id} as {filter_enrollment}")
+            return Ok(user)
+
+    def search_all_courses(self, search_term: str = ""):
+        """"needs permission if subadmin"""
+        try:
+            return self.canvas.search_all_courses(search=search_term)
+        except canvasapi.exceptions.Forbidden:
+            return False
 
     def import_courses(self, filename):
         """from csv file updates table Course and Teacher
@@ -1152,11 +1256,11 @@ class CanvasRobot(object):
         db = self.db
         if course_id:
             qry = ((db.course.ac_year == self.year) &
-                   (db.document.course ==db.course.id) &
+                   (db.document.course == db.course.id) &
                    (db.course.course_id == course_id))
         else:
             qry = ((db.course.ac_year == self.year) &
-               (db.document.course == db.course.id))
+                   (db.document.course == db.course.id))
 
         try:
             items = db(qry).select(db.document.ALL, db.course.course_id, db.course.name)
@@ -1242,38 +1346,133 @@ class CanvasRobot(object):
         db.commit()
         return counters
 
+    def is_leaf(self, tag: bs4.Tag):
+
+        # one child: a string
+        if (len(list(tag.children)) == 1 and  # the NavigableString is a child
+                len(tag.contents) == 1 and
+                isinstance(tag.contents[0], NavigableString)):
+            return True
+        # no siblings
+        if (not tag.find_next_sibling() and
+                not tag.find_previous_sibling() and
+                len(tag.contents) == 0):
+            return result
+        # no children
+        if (len(list(tag.children) == 0 and
+                len(tag.contents) == 0)):
+            return result
+
     # transformation functions
-    @staticmethod
-    def search_replace_in_page(page,
-                               search_text: str,
-                               replace_text: str,
-                               dryrun=False) -> Tuple[int, str]:
+    def search_replace_in_page(self,
+                               page: canvasapi.page,
+                               search_term: str = "",
+                               replace_term: str = "",
+                               search_only: bool = True,
+                               ignore_case: bool = True,
+                               no_confirm: bool = False,
+                               dryrun: bool = True) -> Tuple[int, str]:
         """
+        In page search and mark (search_only) found instances. Or if not search_only replace and
+        modify the page in Canvas, unless dryrun is True
+        :param no_confirm: if True don't ask for confirmation when replacing
+        :param ignore_case:
         :param page: Canvas page object to be searched or updated
-        :param search_text: text to search
-        :param replace_text: text to replace with
-        :param dryrun: no updates, only return marked body if True
-        :returns: count, new_body tuple
+        :param search_term: text to search
+        :param replace_term: text to replace with
+        :param search_only: if False Replace
+        :param dryrun: no real replacement
+        :returns:
+        count (of occurrences), marked_body with found occurrences marked in red if search_only
+        else
+        - if not dryrun and not confirming replace count = 0
+
         """
-        if dryrun:
-            new_body, count = re.subn(search_text, ' <span style="color: red;">' + search_text + '</span>', page.body)
-        else:
-            new_body, count = re.subn(search_text, replace_text, page.body)
+        total_count = 0
+
+        def check_leafs(tag: bs4.element.Tag):
+            """if the NavigableString leafs contains the current search_term
+            mark with -> <- and make the leaf a span, styled red
+            :returns count of locations found"""
+            local_count = 0
+            try:
+                for ndx, child in enumerate(tag.children):
+                    if not isinstance(child, bs4.NavigableString):
+                        continue
+                    # is NS...
+                    if search_term_l in str(child).lower():
+                        item_string, count = re.subn(search_term, '->' + search_term + '<-',
+                                                     child.string,
+                                                     flags=flags)
+                        new_string = soup.new_string(item_string)
+                        local_count += count
+                        # item.replace_with(new_string)  # value error if '
+
+                        new_span = soup.new_tag("span", style='color:red;')
+                        new_span.string = new_string  # child.string
+                        tag.replace_with(new_span)
+
+            except (AttributeError, Exception) as e:
+                Exception(f"check_leafs failed with{e}")
+
+            return local_count
+
+        flags = re.IGNORECASE if ignore_case else 0
+        # if found inside a <a> link or inside an iframe: mark on the outside
+        soup = BeautifulSoup(page.body, 'lxml')
+
+        search_term_l = search_term.lower()
+        # items = soup.find_all()
+        items = list(soup.descendants)
+
+        lookup_attr = dict(a="href", iframe="src")
+
+        for item in items:
+            # handle tags with links (href/src): wrap with a span
+            if ((item.name == 'a' and search_term_l in str(item['href']).lower()) or
+                    (item.name == 'iframe' and search_term_l in str(item['src']).lower())):
+                # create a span to wrap the string
+                span = soup.new_tag("span", attrs={'style': "color:red;"})
+                msg = f"'{search_term}' in {item.name} ({lookup_attr(item.name)})"
+                span.string = f"{msg}->"
+                item.wrap(span)
+                total_count += 1
+            # allways
+            total_count += check_leafs(item)  # returns count of found locations
+
+        marked_body = str(soup)  # html
+        # marked_body, count = re.subn(search_term, ' <span style="color: red;">' + search_term + '</span>',
+        #                             page.body,
+        #                             flags=flags)
+        if not search_only and not dryrun:
+            # let's only do this if you're really sure
+            new_body, total_count = re.subn(search_term, replace_term, page.body, flags=flags)
             # update page in canvas
-            page.edit(wiki_page=dict(body=new_body))
-            new_body = ""
-        return count, new_body
+            if (no_confirm or
+                    rich.prompt.Confirm.ask(f"Are you sure you want to replace '{search_term}' with "
+                                            f"'{replace_term}' in "
+                                            "page<a href="
+                                            f"'{self.canvas_url}/courses/{page.course_id}/pages/{page.url}'"
+                                            f"becoming '{new_body}' ?")):
+                page.edit(wiki_page=dict(body=new_body))
+            else:
+                total_count = 0
+        return total_count, marked_body
 
     def course_search_replace_pages(self,
                                     course_id: int,
-                                    source: str,
-                                    target: str,
-                                    dryrun=False) -> Tuple[int, list[Tuple], str]:
+                                    search_term: str = "",
+                                    replace_term: str = "",
+                                    search_only: bool = True,
+                                    ignore_case: bool = True,
+                                    dryrun: bool = True) -> Tuple[int, list[Tuple], str]:
         """
         In a course replace text (or html) in all pages
+        :param ignore_case:
         :param course_id: canvas course_id
-        :param source: text te find
-        :param target: text to replace with
+        :param search_term: text te find
+        :param replace_term: text to replace with
+        :param search_only: False is Replace
         :param dryrun: True: don't update just return marked body
         :returns tuple of count, list of page tuples, string of html bodies
         """
@@ -1290,20 +1489,26 @@ class CanvasRobot(object):
         pages = course.get_pages(include=['body'])
         pages = filter(lambda p: p.title[0:3] != 'UVT', pages)  # skip
         for page in pages:
-            if page.body and source in page.body:
-                count, new_body = self.search_replace_in_page(page, source, target, dryrun)
+            if page.body and search_term.lower() in page.body.lower():
+                count, new_body = self.search_replace_in_page(page,
+                                                              search_term=search_term,
+                                                              replace_term=replace_term,
+                                                              search_only=search_only,
+                                                              ignore_case=ignore_case,
+                                                              dryrun=dryrun)
                 if count:
                     found_pages.append((course_id, course.name, page.url, page.title))
                 total_count += count
-                if dryrun:
-                    marked_bodies += new_body
+                marked_bodies += new_body
 
         return total_count, found_pages, marked_bodies
 
     def course_search_replace_pages_all_courses(self,
-                                                source: str,
-                                                target: str,
-                                                dryrun=False):
+                                                search_term: str,
+                                                replace_term: str,
+                                                search_only: bool = True,
+                                                ignore_case: bool = True,
+                                                dryrun: bool = False):
 
         with Progress(console=self.console) as progress:
             task_count = progress.add_task("[green]Getting all courses...",
@@ -1321,23 +1526,26 @@ class CanvasRobot(object):
                                 advance=1)  # Update de voortgangsbalk
                 try:
                     count, found_pages, marked_bodies = self.course_search_replace_pages(course_id=course.id,
-                                                                                         source=source,
-                                                                                         target=target,
+                                                                                         search_term=search_term,
+                                                                                         replace_term=replace_term,
+                                                                                         search_only=search_only,
+                                                                                         ignore_case=ignore_case,
                                                                                          dryrun=dryrun)
+                except (NameError, Exception) as e:
+                    logger.error("Error {}".format(e))
+                    pass
+                else:
                     sum_count += count
                     if found_pages:
                         sum_found_pages.extend(found_pages),
                     sum_marked_bodies += marked_bodies
-                except Exception as e:
-                    logger.error("Error {}".format(e))
-                    pass
 
         return sum_count, sum_found_pages, sum_marked_bodies
 
     def get_examinations_from_database(self,
-                                       single_course=None,
+                                       single_course: int = None,
                                        orderby=None,
-                                       candidate=False):
+                                       candidate: bool = False):
         """ get all assignments/examinations in the current year
         """
         db = self.db
@@ -1417,49 +1625,61 @@ class CanvasRobot(object):
         db(qry).update(**ud_fields)
         db.commit()
 
-    def update_db_for(self, course, single_course=None, minimal=False):
+    def update_db_for(self, course, only_course: bool = False) -> int:  # , single_course: int = None):
         """
-
-        :param course:
-        :param single_course:
-        :param minimal: only crate / update course core data
+        updating the course in the db
+        :param only_course: if True we won't record examinations and documents
+        :param course: a course object
         :return:
         """
 
-        def count_students(course):
+        def count_students(course: canvasapi.course) -> int:
+            """" return -1 if not authorized"""
             # students
-            students = course.get_users(enrollment={'type': 'StudentEnrollment'})
-            # remove student with name=='Test Student'
-            nr_students = len(list(filter(lambda s: s.name != 'Test student',
-                                          list(students))))
-            return nr_students
+            try:
+                students = course.get_users(enrollment={'type': 'StudentEnrollment'})
+                # remove student with name=='Test Student'
+                nr_students = len(list(filter(lambda s: s.name != 'Test student',
+                                              list(students))))
+            except canvasapi.exceptions.Forbidden:
+                msg = f"Warning: Not authorized to get info about People in course {course.id} {course.name}"
+                self.errors.append(msg)
+                return -1
+            else:
+                return nr_students
+
         db = self.db
         logger.debug("course: {}".format(course.name))
 
         # students
-        nr_students = count_students(course)
+        nr_students = count_students(course)  # -1 if not authorized
 
         # ud teachers
-        teacher_logins, teacher_names, teachers_ids = self.update_db_teachers(course)
+        result = self.update_db_teachers(course)
+        if is_err(result):
+            teacher_logins, teacher_names, teacher_ids = (), (), ()
+        else:
+            teacher_logins, teacher_names, teacher_ids = result.ok_value
 
         format_str = "%Y-%m-%dT%H:%M:%SZ"
         creation_date = datetime.strptime(course.created_at, format_str)
-        ignore_examinations = (
-            self.get_examinations_from_database(single_course=single_course))
-        # filter: we need only our course.id with candidate False
-        ignore_examination_names = [row.name for row in ignore_examinations
+
+        examinations = (
+            self.get_examinations_from_database(single_course=course.id))
+        # filter: we want to ignore some examinations
+        ignore_examination_names = [row.name for row in examinations
                                     if (row.course == course.id and row.ignore)]
 
         md = self.course_metadata(course.id, frozenset(ignore_examination_names))
 
         c_id = self.update_db_course(course, creation_date, md, nr_students, teacher_logins, teacher_names)
 
-        if c_id:  # a new course has been inserted in the db
+        if c_id:  # a new course has been inserted in the db: signal this in status field
             db(db.course.id == c_id).update(status=2)
         else:
             c_id = db(db.course.course_id == course.id).select().first().id
 
-        for item in md.examination_records:
+        for item in [] if only_course else md.examination_records:
             # candidate is True if course_name in examination_list else False
             _ = db.examination.update_or_insert((db.examination.course ==
                                                  item.course_id) &
@@ -1468,13 +1688,14 @@ class CanvasRobot(object):
                                                 course_name=item.course_name,
                                                 name=item.name
                                                 )
-        for user_id in teachers_ids:
-            db.course2user.update_or_insert((db.course2user.course == c_id) &
-                                            (db.course2user.user == user_id),
-                                            course=c_id,
-                                            user=user_id,
-                                            role='T')
-        files = course.get_files()
+        for user_id in teacher_ids:
+            _ = db.course2user.update_or_insert((db.course2user.course == c_id) &
+                                                (db.course2user.user == user_id),
+                                                course=c_id,
+                                                user=user_id,
+                                                role='T')
+
+        files = [] if only_course else course.get_files()
         for file in files:
             _ = db.document.update_or_insert((db.document.course == c_id) &
                                              (db.document.url == file.url),
@@ -1490,46 +1711,75 @@ class CanvasRobot(object):
         return c_id  # course id in db for new of existing course
 
     def update_db_course(self, course, creation_date, md, nr_students, teacher_logins, teacher_names):
-        # update table course
+        """update table course
+        :returns new row.id if new row is inserted, or None if row is only updated"""
+
         db = self.db
         # course_id = None
         try:
-            course_id = db.course.update_or_insert(db.course.course_id == course.id,
-                                                   course_id=course.id,
-                                                   # status=course.workflow_state,
-                                                   course_code=course.course_code,
-                                                   sis_code=course.sis_course_id,
-                                                   # year course_code and suffixes
-                                                   name=course.name,
-                                                   creation_date=creation_date,
-                                                   ac_year=self.year,
-                                                   nr_students=nr_students,
-                                                   nr_modules=md.nr_modules,
-                                                   nr_module_items=md.nr_module_items,
-                                                   nr_pages=md.nr_pages,
-                                                   nr_assignments=md.nr_assignments,
-                                                   nr_quizzes=md.nr_quizzes,
-                                                   assignments_summary=md.assignments_summary,
-                                                   examinations_summary=md.examinations_summary,
-                                                   teachers=teacher_logins,
-                                                   teachers_names=teacher_names)
+            row_id = db.course.update_or_insert(db.course.course_id == course.id,
+                                                course_id=course.id,
+                                                account_id=course.account_id,
+                                                # status=course.workflow_state,
+                                                course_code=course.course_code,
+                                                term=course.term["name"],
+                                                sis_code=course.sis_course_id if hasattr(course,
+                                                                                         'sis_course_id') else "n.a.",
+                                                # year course_code and suffixes
+                                                name=course.name,
+                                                creation_date=creation_date,
+                                                ac_year=self.year,
+                                                nr_students=nr_students,
+                                                nr_modules=md.nr_modules,
+                                                nr_module_items=md.nr_module_items,
+                                                nr_pages=md.nr_pages,
+                                                nr_assignments=md.nr_assignments,
+                                                nr_quizzes=md.nr_quizzes,
+                                                assignments_summary=md.assignments_summary,
+                                                examinations_summary=md.examinations_summary,
+                                                teachers=teacher_logins,
+                                                teachers_names=teacher_names)
             db.commit()  # really needed here??
         except Exception as e:
             err = f"{e} error inserting {course.name}"
             self.add_message("<InsertError>", err)
             logger.exception(err)
             raise
-        return course_id
+        return row_id
 
-    def update_db_teachers(self, course) -> Tuple[list[str], list[str], list[int]]:
+    def update_db_teachers(self, course) -> Result[Tuple[list[str], list[str], list[int]], str]:
         db = self.db
-        teachers = course.get_users(enrollment={'type': 'TeacherEnrollment'})
+        try:
+            teachers = list(course.get_users(enrollment={'type': 'TeacherEnrollment'}))
+            # if self.admin(-id) profile and mail comes along...
+            # list(), to force check permission
+        except canvasapi.exceptions.Forbidden:
+            msg = f"Not authorized to get info about Teachers in {course.name}"
+            self.errors.append(msg)
+            return Err(msg)
         teachers_ids = []
         for teacher in teachers:
-            if not hasattr(teacher, 'login_id'):
-                continue
-            # print(teacher.name)
-            first_name, last_name, prefix = self.parse_sortable_name(teacher)
+            if not hasattr(teacher, 'login_id'):  # can't use the db.user table ...
+                try:
+                    profile = self.canvas.get_user(teacher.id).get_profile()
+                    teacher.login_id = profile["login_id"]
+                    teacher.email = profile["primary_email"]
+                except canvasapi.exceptions.Forbidden:
+                    msg = f"Not authorized to get login/mail info about teacher{teacher.name} in {course.name}"
+                    self.errors.append(msg)
+                    teacher.login_id = "n.a."
+                    teacher.email = "n.a."
+                except canvasapi.exceptions.ResourceDoesNotExist:
+                    msg = f"Teacher {teacher.id=}{teacher.name} in {course.name} not found"
+                    logger.error(msg)
+                    self.errors.append(msg)
+                    teacher.login_id = "n.a."
+                    teacher.email = "n.a."
+            try:
+                first_name, last_name, prefix = self.parse_sortable_name(teacher)
+            except (Exception, TypeError, ValueError) as _:
+                first_name, last_name, prefix = "", "", ""
+
             inserted_id = db.user.update_or_insert(db.user.username ==
                                                    teacher.login_id,
                                                    user_id=teacher.id,
@@ -1549,15 +1799,14 @@ class CanvasRobot(object):
             # (they don't have a login attribute)
             teacher_logins = [teacher.login_id for teacher in teachers
                               if hasattr(teacher, 'login_id')]
-            teacher_names = [teacher.name for teacher in teachers
-                             if hasattr(teacher, 'login_id')]
+            teacher_names = [teacher.name for teacher in teachers]
         except AttributeError as e:
             # no login_id
             msg = (f"skipped teacher of {course.name} "
                    f"[{course.id}] due to {e}")
             logger.warning(msg)
         logger.debug("instructors: {0}".format(teacher_logins))  # instructors
-        return teacher_logins, teacher_names, teachers_ids
+        return Ok((teacher_logins, teacher_names, teachers_ids))
 
     # noinspection PyUnusedLocal
     def update_database_from_canvas(self,
@@ -1566,7 +1815,7 @@ class CanvasRobot(object):
                                     max_number=None,
                                     stop_list=None):
         """
-            Using the canvasapi to read the TST courses for the selected year
+            Use the canvasapi to read the courses for the selected year
             (or a single course using canvas course_id or the osiris id) and
             - record internal_id course_id, fname and instructors in the
             table course
@@ -1618,7 +1867,7 @@ class CanvasRobot(object):
                 self.add_message("<Progress>", (course.name, idx, num_courses))
 
                 # only insert/update course if current year unless single_course
-                if (str(course.sis_course_id)[:4] != str(self.year)
+                if (str(course.term)[:4] != str(self.year)
                     or course.name.endswith('conclude')) \
                         and not (single_course or single_course_osiris_id):
                     continue
@@ -1629,7 +1878,7 @@ class CanvasRobot(object):
                 if idx > max_number:
                     break
 
-                self.update_db_for(course, single_course=single_course)
+                self.update_db_for(course)  # , single_course=single_course)
                 num_rows += 1
 
             msg = f"[green]Updated db from Canvas for {target}. {num_rows} rows changed"
@@ -1641,7 +1890,7 @@ class CanvasRobot(object):
         db.commit()
         return num_rows
 
-    def is_user_valid(self, userinfo):
+    def is_user_valid(self, userinfo) -> Tuple[bool, str]:
         """"
         :param userinfo (dict, instance, named tuple or Storage instance with
         attributes id, login_id)
@@ -1653,15 +1902,23 @@ class CanvasRobot(object):
         else:
             user = userinfo
 
-        user = self.canvas.get_user(user.id)
-        profile = user.get_profile()
-        if 'login_id' not in profile.keys():
-            return True, 'no login_id, assume valid'
-        if 'closed' in profile['login_id']:
-            return False, 'login closed'
-        if 'invalid' in profile['primary_email']:
-            return False, 'mail invalid'
-        return True, 'appears valid'
+        try:
+            user = self.canvas.get_user(user.id)
+            profile = user.get_profile()
+        except canvasapi.exceptions.ResourceDoesNotExist:
+            return False, "User (and profile) not found, assume False"
+        except canvasapi.exceptions.Forbidden:
+            return True, "User profile not found, due to rights, assume True"
+        except Exception as e:
+            return True, f"User profile not found, due to {e}, assume True"
+        else:
+            if 'login_id' not in profile.keys():
+                return True, 'no login_id, have to assume valid'
+            if 'closed' in profile['login_id']:
+                return False, 'login closed'
+            if 'invalid' in profile['primary_email']:
+                return False, 'mail invalid'
+            return True, 'appears valid'
 
     @staticmethod
     def valid_c_id(c_id):
@@ -1764,9 +2021,9 @@ class CanvasRobot(object):
         assert ", " in user.sortable_name, "sortable_name should contain comma"
         source = user.sortable_name
         pat = re.compile(
-            r'(?P<last_name>[\w \-]+), (?P<first_name>\w+)'
-            r'\s?((\((?P<first_name_par>\w+)\))|'
-            r'(\((?P<init>[\w.]+.)\)))?(\s*(?P<prefix>\w+))?')
+            r'(?P<last_name>[\w \'\-]+), (?P<first_name>[\w\']+)'
+            r'\s?((\((?P<first_name_par>[\'\w]+)\))|'
+            r'(\((?P<init>[\w.]+.)\)))?(\s*(?P<prefix>[\'\w]+))?')
         d = re.match(pat, source)
         if not d:
             print("!!!Failed parsing!!!")
@@ -1958,7 +2215,10 @@ class CanvasRobot(object):
                                  gui_queue=None
                                  ):
         """
-        :param course_id: Canvas course_id: the quizzes are added to this course
+        :param course_id:
+        except canvasapi.exceptions.Forbidden:
+            return True, "User profile not found, due to rights, assume True"
+ course_id: the quizzes are added to this course
         :param question_format: used to create the question name.
         They will be numbered. Should contain '{}' as  placeholder
         starting with 1

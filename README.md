@@ -20,7 +20,7 @@ urltransform --help
 - [CanvasAPI](https://canvasapi.readthedocs.io/en/stable/getting-started.html) 
 - rich
 - rich_click
-- keyring (safe store of api token)
+- keyring (safe store for API key)
 - pydal (local database)
 - pywebview (HTML reporting)
 - [opt] pymemcache (install to add caching canvas interaction)
