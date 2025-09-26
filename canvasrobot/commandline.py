@@ -1,17 +1,18 @@
-from result import is_ok, is_err, Result
-import rich
-from rich.prompt import Prompt
+# from result import is_ok, is_err, Result
+# import rich
+# from rich.prompt import Prompt
 import rich_click as click
 
-from .commandline_model import (get_logger,
+from .commandline_model import (
+                                get_logger,  # noqa: F401
                                 CanvasRobot,
                                 create_db_folder,
                                 enroll_student,
                                 search_in_course,
                                 search_in_courses,
-                                search_replace_pages,
-                                search_replace_show,
-                                show_search_result,
+                                search_replace_pages,  # noqa: F401
+                                search_replace_show,  # noqa: F401
+                                show_search_result,  # noqa: F401
                                 overview_courses,
                                 overview_documents,
                                 )

@@ -1,3 +1,4 @@
+import os
 import webview
 import webview.menu as wm
 
@@ -30,14 +31,14 @@ def open_file_dialog():
 
 
 if __name__ == '__main__':
-    window_1 = webview.create_window(
-        'Application Menu Example', 'https://pywebview.flowrl.com/hello'
-    )
-    window_2 = webview.create_window(
+    # window_1 = webview.create_window(
+    #     'Application Menu Example', 'https://pywebview.flowrl.com/hello'
+    # )
+    window = webview.create_window(
         'Another Window', html='<h1>Another window to test application menu</h1>'
     )
 
-    menu_items_not_ok = [
+    menu_items = [
         wm.Menu(
             'Test Menu',
             [
@@ -55,6 +56,7 @@ if __name__ == '__main__':
         wm.Menu('Nothing Here', [wm.MenuAction('This will do nothing', do_nothing)]),
     ]
 
-    menu_items = [wm.Menu('test', ['een', 'twee'])]
-
     webview.start(menu=menu_items)
+
+    # handle clicking the red close button( )
+    os._exit(0)

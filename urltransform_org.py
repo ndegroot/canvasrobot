@@ -1,27 +1,23 @@
 import re
-import os
 import sys
-import pathlib
-import logging
-import sqlite3
 import openpyxl
 import webview
 from attrs import define
 
-from result import Ok, Err, Result, is_ok, is_err
+from result import Ok, Err, Result, is_ok, is_err  # noqa: F401
 from canvasrobot import CanvasRobot, Field, get_logger
 
 MS_URL = "https://videocollege.uvt.nl/Mediasite/Play/%s"
 PN_URL = "https://tilburguniversity.cloud.panopto.eu/Panopto/Pages/Viewer.aspx?id=%s"
 
 logger_name = "urltransform"
-logger = get_Logger(logger_name)
+logger = get_logger(logger_name)
 
 
 def replace_and_count(original_string: str,
                       search_string: str,
                       replace_string: str,
-                      dryrun=False) -> (str, int):
+                      dryrun=False) -> tuple[str, int]:
     count = 0
     processed_string = original_string
     while search_string in processed_string:
@@ -86,12 +82,12 @@ class UrlTransformationRobot(CanvasRobot):
     count_replacements = 0
 
     def __init__(self, db_folder=None, is_testing=False):
-        super().__init__(db_folder=db_folder, is_testing=is_testing)  # pass location of database
+        super().__init__(db_folder=db_folder, is_testing=is_testing)  # pass the location of the database
         self.add_media_ids_table()
         if self.db(self.db.ids).isempty():
             self.import_ids()
 
-    # Begin database section
+    # Begin the database section
     def add_media_ids_table(self):
         self.db.define_table('ids',
                              Field('panopto_id', 'string'),
@@ -112,8 +108,9 @@ class UrlTransformationRobot(CanvasRobot):
                                panopto_id=row['PanoptoID'])
         self.db.commit()
 
-    def get_video_ids(self) -> Result[list[dict[str, str]], str]:
-        """read ids table from spreadsheet"""
+    @staticmethod
+    def get_video_ids() -> Result[list[dict[str, str]], str]:
+        """read id table from the spreadsheet"""
         xls_path = "databases/redirect_list.xlsx"
         try:
             sh = openpyxl.load_workbook(xls_path).active
@@ -136,7 +133,7 @@ class UrlTransformationRobot(CanvasRobot):
 
     # End database section
 
-    def mediasite2panopto(self, text: str, dryrun=False) -> (str, bool):
+    def mediasite2panopto(self, text: str, dryrun=False) -> tuple[str, bool, int]:
         """
         :param text possibly with mediasite urls
         :param dryrun: if true just statistics, no action
@@ -151,10 +148,10 @@ class UrlTransformationRobot(CanvasRobot):
         updated = False
         updated_text = text
         count_replacements = 0
-        # match each source-url and extract the id into a  list of ms_ids
+        # match each source-url and extract the id into a list of ms_ids
         matches = re.findall(r'(https://videocollege\.uvt\.nl/Mediasite/Play/([a-z0-9]+))', text)
 
-        # for each ms_id: lookup p_id and construct new target-url
+        # for each ms_id: look up p_id and construct a new target-url
         for match in matches:
             ms_url = match[0]
             ms_id = match[1]

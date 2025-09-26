@@ -1,6 +1,6 @@
 # from canvasrobot import UrlTransformationRobot, show_result
-from canvasrobot.urltransformrobot import cli
+from canvasrobot.commandline import cli
 
 
 if __name__ == "__main__":
-    cli()
+    cli("--version")

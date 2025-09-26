@@ -1,5 +1,4 @@
-import os
-from canvasrobot import CanvasRobot, show_search_result, search_replace_show
+from canvasrobot import CanvasRobot
 from canvasrobot.commandline import enroll_student, search_replace_pages
 TEST_COURSE = 34  # first create this test course in Canvas
 

@@ -1,19 +1,16 @@
 import re
-import os
 import sys
 import typing
 import operator
-import pathlib
 from pathlib import Path
 import logging
-from pydal.objects import Row,Rows
-import sqlite3
+from pydal.objects import Row
 import openpyxl
 import webview
 from attrs import define
 import rich_click as click
 
-from result import Ok, Err, Result, is_ok, is_err
+from result import Ok, Err, Result, is_err
 from canvasrobot import CanvasRobot, Field
 import canvasapi
 from .commandline import create_db_folder, get_logger
@@ -31,7 +28,7 @@ logger.setLevel(logging.INFO)
 def replace_and_count(original_string: str,
                       search_string: str,
                       replace_string: str,
-                      dryrun=False) -> (str, int):
+                      dryrun=False) -> tuple[str, int]:
     count = 0
     processed_string = original_string
     while search_string in processed_string:
@@ -110,81 +107,25 @@ class TransformedPage:
         return list(map(attr_of, cls.list))
 
 
-class UrlTransformationRobot(CanvasRobot):
-    con = None
-    cr = None
-    current_page = None
-    current_page_url = None
-    # current_transformed_pages: list[TransformedPage] = []
-    transformation_report = ""
-    pages_changed = 0
-    count_replacements = 0
-
-    def __init__(self, db_folder: Path = None,
-                 is_testing: bool = False,
-                 db_auto_update: bool = False,
-                 db_force_update: bool = False):
-        super().__init__(db_folder=db_folder,
-                         is_testing=is_testing,
-                         db_auto_update=db_auto_update,
-                         db_force_update=db_force_update)
-        self.add_media_ids_table()
-        if self.db(self.db.ids).isempty():
-            self.import_ids()
-
-    # Begin database section
+class MixinMediasite2Panopto:
     def add_media_ids_table(self):
         self.db.define_table('ids',
                              Field('panopto_id', 'string'),
                              Field('mediasite_id', 'string'))
-
-    def import_ids(self):
-
-        ids_result = self.get_video_ids()
-        if is_err(ids_result):
-            raise ImportExcelError(ids_result.err_value)
-
-        rows = ids_result.ok_value
-        print(rows[0])
-        assert rows[0]['PanoptoID'] == '532f98ad-43dc-45b6-8109-aeeb01865f0e', \
-            "import error in db"
-        for row in rows:
-            self.db.ids.insert(mediasite_id=row['MediasiteID'],
-                               panopto_id=row['PanoptoID'])
-        self.db.commit()
-
-    def get_video_ids(self) -> Result[list[dict[str, str]], str]:
-        """read ids table from spreadsheet"""
-        xls_path = self.db_folder / "redirect_list.xlsx"
-        try:
-            sh = openpyxl.load_workbook(xls_path).active
-            column_names = next(sh.values)[0:]
-            # Initialize the list of dictionaries
-            rows_as_dicts = []
-            # Iterate over the sheet rows (excluding header)
-            for row in sh.iter_rows(min_row=2, values_only=True):
-                row_dict = {column_names[i]: row[i] for i in range(len(column_names))}
-                rows_as_dicts.append(row_dict)
-            return Ok(rows_as_dicts)
-        except Exception as e:
-            msg = f"Error opening exported video ID list({e})"
-            return Err(msg)
 
     def lookup_panopto_id(self, mediasite_id: str) -> str:
         db = self.db  # just sugarcoat
         row = db(db.ids.mediasite_id == mediasite_id).select(db.ids.panopto_id).first()
         return row.panopto_id if row else None
 
-    # End database section
-
-    def mediasite2panopto(self, text: str, dryrun=True) -> (str, bool, int):
+    def mediasite2panopto(self, text: str, dryrun=True) -> tuple[str, bool, int]:
         """
         Replace links in a single page or other item with text
         :param text possibly with mediasite urls
         :param dryrun: if true just statistics, no action
         :returns tuple with
-        1. text with transformed mediasite urls if panopto id are found in lookup   (unless dryrun)
-        2. flag True, if updates were made
+        1. text with transformed mediasite urls if panopto id are found in lookup (unless dryrun)
+        2. flag True if updates were made
         3. count of replacements made
         (replace the ms_id with p_id in the
         https://videocollege.uvt.nl/Mediasite/
@@ -196,7 +137,7 @@ class UrlTransformationRobot(CanvasRobot):
         updated = False
         updated_text = text
         count_replacements = 0
-        # match each source-url and extract the id into a  list of ms_ids
+        # match each source-url and extract the id into a list of ms_ids
         matches = re.findall(r'(https://videocollege\.uvt\.nl/Mediasite/Play/([a-z0-9]+))', text)
 
         if num_matches := len(matches):
@@ -204,7 +145,7 @@ class UrlTransformationRobot(CanvasRobot):
 
         msg = (f"<p><a href={self.current_page_url} target='_blank'>"
                f" Open page '{self.current_page}'</a></p>")
-        # for each ms_id: lookup p_id and construct new target-url
+        # for each ms_id: look up p_id and construct a new target-url
         action_or_not = 'would become' if dryrun else 'changed into'
         for match in matches:
             ms_url = match[0]
@@ -236,18 +177,73 @@ class UrlTransformationRobot(CanvasRobot):
 
         return updated_text, updated, count_replacements
 
+    def import_ids(self):
+
+        ids_result = self.get_video_ids()
+        if is_err(ids_result):
+            raise ImportExcelError(ids_result.err_value)
+
+        rows = ids_result.ok_value
+        print(rows[0])
+        assert rows[0]['PanoptoID'] == '532f98ad-43dc-45b6-8109-aeeb01865f0e', \
+            "import error in db"
+        for row in rows:
+            self.db.ids.insert(mediasite_id=row['MediasiteID'],
+                               panopto_id=row['PanoptoID'])
+        self.db.commit()
+
+    def get_video_ids(self) -> Result[list[dict[str, str]], str]:
+        """read id table from the spreadsheet"""
+        xls_path = self.db_folder / "redirect_list.xlsx"
+        try:
+            sh = openpyxl.load_workbook(xls_path).active
+            column_names = next(sh.values)[0:]
+            # Initialize the list of dictionaries
+            rows_as_dicts = []
+            # Iterate over the sheet rows (excluding header)
+            for row in sh.iter_rows(min_row=2, values_only=True):
+                row_dict = {column_names[i]: row[i] for i in range(len(column_names))}
+                rows_as_dicts.append(row_dict)
+            return Ok(rows_as_dicts)
+        except Exception as e:
+            msg = f"Error opening exported video ID list({e})"
+            return Err(msg)
+
+
+class UrlTransformationRobot(CanvasRobot, MixinMediasite2Panopto):
+    con = None
+    cr = None
+    current_page = None
+    current_page_url = None
+    # current_transformed_pages: list[TransformedPage] = []
+    transformation_report = ""
+    pages_changed = 0
+    count_replacements = 0
+
+    def __init__(self, db_folder: Path = None,
+                 is_testing: bool = False,
+                 db_auto_update: bool = False,
+                 db_force_update: bool = False):
+        super().__init__(db_folder=db_folder,
+                         is_testing=is_testing,
+                         db_auto_update=db_auto_update,
+                         db_force_update=db_force_update)
+        self.add_media_ids_table()
+        if self.db(self.db.ids).isempty():
+            self.import_ids()
+
     def save_transform_data_db(self, course_id: int = None):
 
         course = self.canvas.get_course(course_id)
 
-        c_id = self.update_db_for(course, single_course=course_id, metadata=False)
-        # course needs to be present in course table for course2user
+        c_id = self.update_db_for(course, single_course=course_id)
+        # course needs to be present in the course table for course2user
 
         db = self.db
 
         teacher_names, teacher_logins, teacher_ids = self.update_db_teachers(course)
 
-        # make relational link between course-user(teacher)
+        # make a relational link between course-user(teacher)
         for teacher_id in teacher_ids:
             _ = db.course2user.update_or_insert((db.course2user.user == teacher_id) &
                                                 (db.course2user.course == course_id),
@@ -270,7 +266,7 @@ class UrlTransformationRobot(CanvasRobot):
         db.commit()
         pass
 
-    def get_transform_data(self, course_id: int) -> Row or None:
+    def get_transform_data(self, course_id: int) -> Row | None:
         """ get (candidate if row.dryrun) transform data
         :param course_id:
         :returns db row or None if not found"""
@@ -283,7 +279,7 @@ class UrlTransformationRobot(CanvasRobot):
         """
         Transform the mediasite urls in all pages of the course with this course_id
         :param course_id:
-        :param dryrun: if true no action just predictions
+        :param dryrun: if true, take no actions, show predictions
         :return: True unless error
         """
         logger.debug(f"Getting pages from course {course_id}")
@@ -306,12 +302,12 @@ class UrlTransformationRobot(CanvasRobot):
                     new_body, updated, count = self.mediasite2panopto(page.body, dryrun=dryrun)
                     self.count_replacements += count
                     if updated:
-                        transformed_page = TransformedPage(page.title, page.html_url)  # build list
+                        _ = TransformedPage(page.title, page.html_url)  # build list
                         self.pages_changed += 1
                         if not dryrun:
                             # actual replacement
                             page.edit(wiki_page=dict(body=new_body))
-            self.save_transform_data_db(course_id)  # uses the pages list in  TransformedPage
+            self.save_transform_data_db(course_id)  # uses the page list in TransformedPage
         return True
 
 

@@ -1,7 +1,7 @@
 from .canvasrobot import CanvasRobot, LocalDAL, \
     EDUCATIONS, COMMUNITIES
 from .canvasrobot_model import STUDADMIN, SHORTNAMES, Field
-from .urltransform import UrlTransformationRobot, show_result, TransformedPage, cli
+from .urltransformrobot import UrlTransformationRobot, show_result, TransformedPage, cli
 from .commandline import show_search_result, search_replace_show, get_logger
 
 __all__ = ["CanvasRobot", "UrlTransformationRobot", "LocalDAL", "Field",
