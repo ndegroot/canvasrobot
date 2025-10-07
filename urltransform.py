@@ -1,4 +1,4 @@
-from canvasrobot import UrlTransformationRobot, show_result
+# from canvasrobot import UrlTransformationRobot, show_result
 from canvasrobot.urltransform import cli
 
 

@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, Union, Callable, Any
+import typing
 import io
 import json
 import mimetypes
@@ -9,27 +9,26 @@ import os
 import re
 from collections import namedtuple
 from datetime import datetime, timezone
-
 import bs4
-# import click
 import pytz
 import logging
 import binascii
 import rich.prompt
-
+from canvasapi.module import ModuleItem
+from pyasn1.type.univ import Boolean
 from result import Ok, Err, Result, is_ok, is_err  # noqa: F401
 import attrs
 from attrs import define, asdict
+from cattrs import structure
 import canvasapi
 import requests
-from bs4 import BeautifulSoup, NavigableString
 
 # from functools import lru_cache
 try:  # type: ignore
     from pymemcache import serde  # type: ignore
     from pymemcache.client import base  # type: ignore
 
-    MEMCACHED: Union[base.Client, bool] = True
+    MEMCACHED: base.Client | bool = True
 except ImportError:
     print("No memcaching supported")
     MEMCACHED = False
@@ -44,12 +43,12 @@ from openpyxl.utils import get_column_letter  # type: ignore
 from openpyxl.workbook import Workbook  # type: ignore
 from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder
 from socket import gaierror, timeout
-from .canvasrobot_model import (Field,  # noqa: F401
+from .canvasrobot_model import (CourseId,
+                                Field,  # noqa: F401
                                 AC_YEAR, NEXT_YEAR,  # type: ignore
-                                EDUCATIONS, COMMUNITIES, LocalDAL, CanvasConfig,
-                                EXAMINATION_FOLDER, COMMUNITY_EDU_IDS)  # type: ignore
-from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, \
-    Stats  # type: ignore
+                                COMMUNITIES, LocalDAL, CanvasConfig,
+                                EXAMINATION_FOLDER, CommunityManager)  # type: ignore
+from .entities import User, QuestionDTO, CourseMetadata, Grade, ExaminationDTO, Stats  # type: ignore
 
 
 class CustomConsole(Console):
@@ -66,7 +65,7 @@ class CustomConsole(Console):
 
 logging.getLogger("canvasapi").setLevel(logging.WARNING)
 # we don't need the info messages
-# from this library
+# from the canvasapi library
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -77,8 +76,8 @@ def file_update(file, **kwargs):
     """
         Updates a file in a course
         :calls: `PUT /api/v1/files/:id \
-        <https://canvas.instructure.com/doc/api/files.html#method.files.update>`_
-        :rtype: :class:`canvasapi.file.File`
+        <https://canvas.instructure.com/doc/api/files.html#method.files.update>`_:
+        :rtype: class:`canvasapi.file.File`
         """
     response = file._requester.request(
         "PUT", "files/{}".format(file.id), _kwargs=combine_kwargs(**kwargs)
@@ -118,11 +117,13 @@ class Profile:
     sortable_name: str
     avatar_url: str
     title: str
-    bio: Optional[str]  # can be N
+    bio: str | None  # can be N
     primary_email: str
     integration_id: str
     time_zone: str
     locale: str
+    pronunciation: str
+    sis_user_id: str = ""
     # effective_locale str)
     # calendar str)
     # lti_user_id str)
@@ -171,8 +172,8 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
     """
     for course get the metadata from memcached if available. return CourseMetadata instance
     :param course_id
-    :param canvas                     the canvas api object
-    :param ignore_assignment_names  list of assignment_names to ignore in/for  the db
+    :param canvas the canvas api object
+    :param ignore_assignment_names a list of assignment_names to ignore in/for the db
     :returns Course metadata instance
     """
     ignore_assignment_names = ignore_assignment_names or []
@@ -188,7 +189,7 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
         - pages
         - assignments
         - submissions
-        :returns course metadata object
+        :returns a course metadata object
         """
         course = canvas.get_course(course_id)
         modules = course.get_modules()
@@ -276,7 +277,7 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
             examinations_summary += (f"\nTotal: {examination_files} "
                                      f"examination files ") if examination_files \
                 else "No examination files"
-        # was this working earlier 2.2.0 ?
+        # was this working earlier 2.2.0?
         # try:
         #    collaborations = course.get_collaborations()
         #    list_of_cols = [c for c in collaborations]
@@ -309,7 +310,7 @@ def course_metadata_memcached(course_id: int, canvas, ignore_assignment_names=No
 # noinspection PyTypeChecker,PyCallingNonCallable
 class CanvasRobot(object):
     """" uses caching since """
-    db: Callable
+    db: typing.Callable
     canvas_login: bool = False
     TOT_WEIGHT: int = 100
     _year: int = AC_YEAR  # the current academic year
@@ -334,6 +335,8 @@ class CanvasRobot(object):
         self.console = console or CustomConsole()  # for commandline use
         self.gui_root = gui_root  # tkinter root
         self.is_debug = is_debug
+        # Create from existing data
+        self.community_manager = CommunityManager.from_legacy_communities(COMMUNITIES)
 
         self.db_folder = db_folder if db_folder else Path.cwd() / 'databases'
         self.db = LocalDAL(is_testing=is_testing,
@@ -439,7 +442,7 @@ class CanvasRobot(object):
     # COURSES----------------------------------------
     def get_course(self, course_id: int, use_sis_id=False, **kwargs):
         """""
-        :param use_sis_id: if true use sis_id to search
+        :param use_sis_id: if True use sis_id to search
         :param course_id
         :returns canvas course by its id"""
         return self.canvas.get_course(course_id, use_sis_id=use_sis_id, **kwargs)
@@ -452,16 +455,16 @@ class CanvasRobot(object):
         return self.canvas.get_courses(enrollment=enrollment)
 
     def get_courses_in_account(self,
-                               by_teachers: Optional[list] = None,
+                               by_teachers: list | None = None,
                                this_year=True,
-                               admin_id: Optional[int] = None):
+                               admin_id: int | None = None):
         """
-        get all courses from canvas in account.
+        get all courses from canvas connected to an account.
 
         :param by_teachers: list of teacher id's
         :param this_year: True=filter courses to include only the current year
         :param admin_id: if given use instead of default admin from config
-        :returns list of courses
+        :returns a list of courses
         """
         console = self.console
 
@@ -483,11 +486,12 @@ class CanvasRobot(object):
                 courses = self.admin.get_courses(by_subaccounts=[admin_id],
                                                  by_teachers=by_teachers,
                                                  include=["term", "teachers"])
-                # no rights note that `course.account_id = 25` for (some of? all of?) the courses  with ids
+                # no rights note that `course.account_id = 25` for (some of? all of?) the courses
+                # with ids
                 # harvested with admin_id = 20
 
                 if len(list(courses)) == 0:
-                    # use csv file with course_ids instead
+                    # use a csv file with course_ids instead
                     console.log(f"No courses found using for admin {admin_id} access through Canvas "
                                 f"(possibly no rights). Using ids from local CSV file instead...")
                     courses = self.get_courses_admin_csv(admin_id)
@@ -515,7 +519,7 @@ class CanvasRobot(object):
         return filtered_courses
 
     def get_courses_admin_csv(self, admin_id):
-        # get ids, create scarce list (only course.id attribute), needs local csv file
+        # get ids, create a scarce list (only course.id attribute), needs a local csv file
         courses = []
         csv_path = Path(self.db_folder) / f"course_ids_admin{admin_id}.csv"
         if not csv_path.exists():
@@ -544,7 +548,7 @@ class CanvasRobot(object):
         return md_result
 
     def get_all_active_courses(self, from_db=True):
-        """:returns list of all canvas courses for this subadmin account"""
+        """:returns a list of all canvas courses for this subadmin account"""
 
         def cur_year_active(course):
             """ filter function"""
@@ -563,16 +567,18 @@ class CanvasRobot(object):
             courses = list(courses)
         return courses
 
-    def get_course_using_osiris_id(self, osiris_id):
+    def get_course_using_osiris_id(self, osiris_id) -> Course | None:
         """
         :returns first TST course with sisid starting with
-        osiris_id in selected  year"""
+        osiris_id in the selected year"""
         for course in self.admin.get_courses():
-            # only consider course if selected year
+            # only consider a course if it's in the selected year
             if str(course.sis_course_id)[:4] != str(self.year):
                 continue
             if course.course_code.startswith(osiris_id):
                 return course
+        else:
+            return None
 
     def get_course_id_using_osiris_id_from_db(self, osiris_id: str):
         db = self.db
@@ -581,6 +587,12 @@ class CanvasRobot(object):
         if rows:
             return rows[0].course_id
         return 0
+
+    def get_course_id_by_name(self, name):
+        return self.community_manager.get_course_id_by_name(name)
+
+    def get_community_by_name(self, name):
+        return self.community_manager.get_community_by_name(name)
 
     # COURSE PARTS: Modules, Pages
     def show_modules(self, course_id):
@@ -597,7 +609,7 @@ class CanvasRobot(object):
             # print("There are {} modules in page".format(len(page)))
         return
 
-    def get_course_pages_module_items(self, course_id) -> tuple[Course, list[Page], list[Any]]:
+    def get_course_pages_module_items(self, course_id) -> tuple[Course, list[Page], list[ModuleItem]]:
         """
         :param course_id
         :returns all all pages"""
@@ -625,13 +637,14 @@ class CanvasRobot(object):
     @staticmethod
     def create_profile(profile_dict):
         """
-        based on :profile_dict
+        based on profile_dict
         :returns Canvas profile or TypeError
         """
         try:
-            profile = Profile(**profile_dict)
-        except TypeError as e:
-            logger.error(f"attribute needs to be added to Profile class: {e}")
+            profile = structure(profile_dict, Profile)
+            # profile = Profile(**profile_dict)
+        except (TypeError, Exception) as e:
+            logger.error(f"attribute from {profile_dict} has a problem entering Profile class: {e}")
             raise
         return profile
 
@@ -647,7 +660,7 @@ class CanvasRobot(object):
 
     def is_teacher_canvas(self, user):
         """
-        check if user is a teacher in one of the TST courses by checking
+        check if a user is a teacher in one of the TST courses by checking
         the canvas courses.
         :param user
         """
@@ -680,7 +693,7 @@ class CanvasRobot(object):
         """
         :param search_name:
         :param email to search on email
-        try search name as a login, then the email if supplied otherwise use
+        first tries to use search_name as a login, then use the email if supplied
         """
         try:
             user = self.canvas.get_user(search_name, 'sis_login_id')
@@ -706,7 +719,7 @@ class CanvasRobot(object):
     @staticmethod
     def get_students_dibsa(c_name, local=True):
         """get list of students from (local) DIBSA CRM"""
-        # idea:  use LDAP instead
+        # idea: use LDAP instead
         url = (f"{'http://127.0.0.1:8000' if local else 'https://webapp.fkt.uvt.nl/'}"
                f"/dibsa/service/call/json/students/{c_name}")
         try:
@@ -727,35 +740,35 @@ class CanvasRobot(object):
 
         return json_result
 
-    def get_students_for_community(self, c_id, local=False):
+    def get_students_for_community(self, course_id: CourseId, local=False) -> dict[str, tuple[list[User], list[str]]]:
         """given
         :param local: get student dat from local Dibsa if True
-        :param c_id community id
-        lookup the list of educations (at least one item)
+        :param course_id community id
+        look up the list of educations (at least one item)
         retrieve the students from local dibsa/ldap
-        for each student lookup canvas user and build list of canvas
+        for each student look up canvas user and build a list of canvas
         user (student)
-        :returns dict  with as key the edu_id list of Canvas students"""
+        :returns dict with as a key the edu_label and as values
+        a tuple of a list of Canvas students and first_enrollers"""
 
-        community_edu_ids = COMMUNITY_EDU_IDS
-        edu_ids = community_edu_ids[c_id]  # list of 1 or more items
+        edu_labels = self.community_manager.get_edulabels_by_course_id(course_id)  # also edulabels (for dibsa lookup)
         students_dibsa = {}
-        for edu_id in edu_ids:
+        for edu_label in edu_labels:
             try:
-                students_dibsa[edu_id] = self.get_students_dibsa(edu_id.upper(),
-                                                                 local=local)
+                students_dibsa[edu_label] = self.get_students_dibsa(edu_label.upper(),
+                                                                    local=local)
             except DibsaRetrieveError as e:
-                msg = f"Unable to retrieve students for {edu_id}"
+                msg = f"Unable to retrieve students for {edu_label}"
                 logger.error(e)
                 raise DibsaRetrieveError(msg)
             if isinstance(students_dibsa, str) or hasattr(students_dibsa, "msg"):
                 msg = students_dibsa["msg"] if hasattr(students_dibsa, "msg") \
-                    else f"Unable to retrieve students for {edu_id}"
+                    else f"Unable to retrieve students for {edu_label}"
                 logger.error(msg)
                 raise DibsaRetrieveError(msg)
 
         students_canvas = {}
-        for edu_id, students in students_dibsa.items():
+        for edu_label, students in students_dibsa.items():
             tmp_students = []
             first_enroll = []
             for student in students:
@@ -769,12 +782,12 @@ class CanvasRobot(object):
                 user = self.search_user(username)
                 if not user:
                     self.errors.append(f"{username} not found in Canvas,")
-                    # todo: cn be reared by adding student to a or the course
-                    first_enroll.append(user)
+                    # todo: can be fixed by adding student to the course
+                    first_enroll.append(username)
                     continue
                 tmp_students.append(user)
-            students_canvas[edu_id] = tmp_students, first_enroll
-        # return a dict with the ed_id as key(s) and a list of studenten as values
+            students_canvas[edu_label] = tmp_students, first_enroll
+        # return a dict with the ed_id as key(s) and a tuple (list of studenten, list of first_enrollers) as values
         return students_canvas
 
     def get_community(self, c_id):
@@ -797,12 +810,12 @@ class CanvasRobot(object):
                          username: str = "",
                          enrollment=None) -> Result[User, str]:
         """
-        search course on osiris_id with enroll using username (more robust,
+        search course on osiris_id then enroll using username (more robust,
         using osiris_id if needed)
 
-        :param search: if given get course using osiris_id
+        :param search: if present, get a course using osiris_id
         :param course_id: course_id
-        :param section_id: enroll in section if provided
+        :param section_id: enroll in a section if provided
         :param username:
         :param enrollment:
         enrollment={'type': 'StudentEnrollment'}
@@ -858,7 +871,7 @@ class CanvasRobot(object):
 
     def enroll_user_in_course(self, user, course, role):
         """
-        enroll identified user in course with role
+        enroll an identified user in a course with a certain role
         :param user:
         :param course:
         :param role:
@@ -895,14 +908,14 @@ class CanvasRobot(object):
         retrieve the students from local or central dibsa(ldap)
         and enroll them"""
 
-        community_edu_ids = COMMUNITY_EDU_IDS
+        community_edu_ids = self.community_manager.get_community_edu_ids()
         for c_id in community_edu_ids:
             # for each community course
             # if c_id != "bauk":
             #    continue
             combi_dict = self.get_students_for_community(c_id,
                                                          local=local)
-            course_id, lookup_sections = COMMUNITIES[c_id]
+            course_id, subcommunities = COMMUNITIES[c_id]
             course = self.get_course(course_id)
             role_student = {'type': 'StudentEnrollment'}
             # first handle the sis_login_ids
@@ -910,8 +923,8 @@ class CanvasRobot(object):
                 _, usernames = combi
                 for username in usernames:  # students
 
-                    if lookup_sections and edu in lookup_sections:
-                        section = lookup_sections[edu]
+                    if subcommunities and edu in subcommunities:
+                        section = subcommunities[edu]
                         section.enroll_user(f"sis_login_id:{username}")
                     else:
                         course.enroll_user(f"sis_login_id:{username}",
@@ -922,8 +935,8 @@ class CanvasRobot(object):
             for edu, combi in combi_dict.items():
                 students, _ = combi
                 for student in students:
-                    if lookup_sections and edu in lookup_sections:
-                        section = lookup_sections[edu]
+                    if subcommunities and edu in subcommunities:
+                        section = subcommunities[edu]
                         self.enroll_user_in_course_section(student, course, section, role=role_student)
                     else:
                         self.enroll_user_in_course(student, course, role=role_student)
@@ -948,7 +961,7 @@ class CanvasRobot(object):
                 print(observer.name)
 
     def remove_observer_from_all_courses(self, username):
-        """ remove user as an observer from all TST courses"""
+        """ remove a user as an observer from all TST courses"""
         removed = []
         try:
             user = self.canvas.get_user(username, 'sis_login_id')
@@ -1006,7 +1019,7 @@ class CanvasRobot(object):
             return False
 
     def import_courses(self, filename):
-        """from csv file updates table Course and Teacher
+        """from a csv file updates table Course and Teacher
         :param filename: filename csv file
         """
 
@@ -1067,7 +1080,7 @@ class CanvasRobot(object):
     # # Old Blackboard interactions
     # def execute_command(self, command, params=None):
     #     """
-    #     not in use ?
+    #     not in use?
     #     :param command: command to execute
     #     :param params: parameters to tune command
     #     """
@@ -1152,7 +1165,7 @@ class CanvasRobot(object):
     #     :param single_course: used for testing
     #     :return: rows/list of dicts """
     #
-    #     db = self.db  # cosmetic reasons
+    #     db = self.db # cosmetic reasons
     #     suffix = '-{}-'.format(self.year)
     #     qry = db.bbcourse.course_suffix.contains(suffix)
     #     if single_course:
@@ -1221,8 +1234,8 @@ class CanvasRobot(object):
     #     time.sleep(120)
 
     def update_documents_db(self, files):
-        """ insert file object properties (fname, url) in table document
-        :param files: list of file objects ( containing fname, url)
+        """ insert file object properties (fname, url) in a table document
+        :param files: list of file objects (containing fname, url)
         """
         db = self.db
         for c_file in files:
@@ -1251,7 +1264,7 @@ class CanvasRobot(object):
                 db.commit()
 
     def get_list_of_documents_db(self, course_id=None):
-        """ get documents/attachments from db als a list
+        """ get documents/attachments from db as a list
         """
         db = self.db
         if course_id:
@@ -1292,8 +1305,8 @@ class CanvasRobot(object):
 
     def transfer_file_to_server(self, url=None, fname=None):
         """download a file to uploads folder from external url using a temporary buffer
-        :param fname: original name of file
-        :param url: remote url to fetch file from
+        :param fname: original name of a file
+        :param url: remote url to fetch a file from
         """
         db = self.db
         filename = fname.strip()
@@ -1351,7 +1364,7 @@ class CanvasRobot(object):
         # one child: a string
         if (len(list(tag.children)) == 1 and  # the NavigableString is a child
                 len(tag.contents) == 1 and
-                isinstance(tag.contents[0], NavigableString)):
+                isinstance(tag.contents[0], bs4.NavigableString)):
             return True
         # no siblings
         if (not tag.find_next_sibling() and
@@ -1362,6 +1375,7 @@ class CanvasRobot(object):
         if (len(list(tag.children) == 0 and
                 len(tag.contents) == 0)):
             return result
+        return False  # maybe not even reachable
 
     # transformation functions
     def search_replace_in_page(self,
@@ -1371,27 +1385,26 @@ class CanvasRobot(object):
                                search_only: bool = True,
                                ignore_case: bool = True,
                                no_confirm: bool = False,
-                               dryrun: bool = True) -> Tuple[int, str]:
+                               dryrun: bool = True) -> tuple[int, str]:
         """
-        In page search and mark (search_only) found instances. Or if not search_only replace and
-        modify the page in Canvas, unless dryrun is True
+        In page search and mark (search_only) found instances. Or, if not search_only,
+        replace and modify the page in Canvas, unless dryrun is True
         :param no_confirm: if True don't ask for confirmation when replacing
-        :param ignore_case:
+        :param ignore_case
         :param page: Canvas page object to be searched or updated
         :param search_term: text to search
         :param replace_term: text to replace with
         :param search_only: if False Replace
         :param dryrun: no real replacement
-        :returns:
-        count (of occurrences), marked_body with found occurrences marked in red if search_only
-        else
-        - if not dryrun and not confirming replace count = 0
+        :returns: a count (of occurrences), marked_body with found occurrences marked in red
+        if search_only else
+        if not dryrun and not confirming replace count = 0
 
         """
         total_count = 0
 
         def check_leafs(tag: bs4.element.Tag):
-            """if the NavigableString leafs contains the current search_term
+            """if the NavigableString leafs contain the current search_term
             mark with -> <- and make the leaf a span, styled red
             :returns count of locations found"""
             local_count = 0
@@ -1406,7 +1419,7 @@ class CanvasRobot(object):
                                                      flags=flags)
                         new_string = soup.new_string(item_string)
                         local_count += count
-                        # item.replace_with(new_string)  # value error if '
+                        # item.replace_with(new_string)  # value error if ...
 
                         new_span = soup.new_tag("span", style='color:red;')
                         new_span.string = new_string  # child.string
@@ -1418,8 +1431,8 @@ class CanvasRobot(object):
             return local_count
 
         flags = re.IGNORECASE if ignore_case else 0
-        # if found inside a <a> link or inside an iframe: mark on the outside
-        soup = BeautifulSoup(page.body, 'lxml')
+        # if found inside an <a> link or inside an iframe: mark on the outside
+        soup = bs4.BeautifulSoup(page.body, 'lxml')
 
         search_term_l = search_term.lower()
         # items = soup.find_all()
@@ -1438,10 +1451,10 @@ class CanvasRobot(object):
                 item.wrap(span)
                 total_count += 1
             # allways
-            total_count += check_leafs(item)  # returns count of found locations
+            total_count += check_leafs(item)  # returns a count of found locations
 
         marked_body = str(soup)  # html
-        # marked_body, count = re.subn(search_term, ' <span style="color: red;">' + search_term + '</span>',
+        # marked_body, count = re.subn(search_term,'<span style="color: red;">' + search_term + '</span>',
         #                             page.body,
         #                             flags=flags)
         if not search_only and not dryrun:
@@ -1465,22 +1478,22 @@ class CanvasRobot(object):
                                     replace_term: str = "",
                                     search_only: bool = True,
                                     ignore_case: bool = True,
-                                    dryrun: bool = True) -> Tuple[int, list[Tuple], str]:
+                                    dryrun: bool = True) -> tuple[int, list[tuple], str]:
         """
-        In a course replace text (or html) in all pages
+        In a course replace text (or HTML) in all pages
         :param ignore_case:
         :param course_id: canvas course_id
-        :param search_term: text te find
+        :param search_term: text to find
         :param replace_term: text to replace with
         :param search_only: False is Replace
-        :param dryrun: True: don't update just return marked body
-        :returns tuple of count, list of page tuples, string of html bodies
+        :param dryrun: True: don't update, return marked body
+        :returns tuple of count, list of page tuples, string of HTML bodies
         """
         total_count = 0
         marked_bodies = ""
         found_pages = []
         course = self.canvas.get_course(course_id)
-        # check if the course is selected only because of an studentEnrollment
+        # check if the course is selected only because of a studentEnrollment
         if course.enrollments and len(course.enrollments) > 0:
             for enrollment in course.enrollments:
                 if enrollment['role'] == 'StudentEnrollment':
@@ -1628,13 +1641,13 @@ class CanvasRobot(object):
     def update_db_for(self, course, only_course: bool = False) -> int:  # , single_course: int = None):
         """
         updating the course in the db
-        :param only_course: if True we won't record examinations and documents
+        :param only_course: if True, we won't record examinations and documents
         :param course: a course object
         :return:
         """
 
-        def count_students(course: canvasapi.course) -> int:
-            """" return -1 if not authorized"""
+        def count_students(course: canvasapi.Course) -> int:
+            """" return -1 if not authorised"""
             # students
             try:
                 students = course.get_users(enrollment={'type': 'StudentEnrollment'})
@@ -1652,7 +1665,7 @@ class CanvasRobot(object):
         logger.debug("course: {}".format(course.name))
 
         # students
-        nr_students = count_students(course)  # -1 if not authorized
+        nr_students = count_students(course)  # -1 if not authorised
 
         # ud teachers
         result = self.update_db_teachers(course)
@@ -1674,7 +1687,7 @@ class CanvasRobot(object):
 
         c_id = self.update_db_course(course, creation_date, md, nr_students, teacher_logins, teacher_names)
 
-        if c_id:  # a new course has been inserted in the db: signal this in status field
+        if c_id:  # a new course has been inserted in the db: signal this in the status field
             db(db.course.id == c_id).update(status=2)
         else:
             c_id = db(db.course.course_id == course.id).select().first().id
@@ -1712,7 +1725,7 @@ class CanvasRobot(object):
 
     def update_db_course(self, course, creation_date, md, nr_students, teacher_logins, teacher_names):
         """update table course
-        :returns new row.id if new row is inserted, or None if row is only updated"""
+        :returns new row.id if a new row is inserted, or None if a row is only updated"""
 
         db = self.db
         # course_id = None
@@ -1747,7 +1760,7 @@ class CanvasRobot(object):
             raise
         return row_id
 
-    def update_db_teachers(self, course) -> Result[Tuple[list[str], list[str], list[int]], str]:
+    def update_db_teachers(self, course) -> Result[tuple[list[str], list[str], list[int]], str]:
         db = self.db
         try:
             teachers = list(course.get_users(enrollment={'type': 'TeacherEnrollment'}))
@@ -1821,7 +1834,7 @@ class CanvasRobot(object):
             table course
             - put teacher details in table user
             - collects info about assignments in assignment_summary
-            - collects info about examinations files in examination_summary
+            - collects info about the examination files in examination_summary
             - reports new tentamination candidates
             :param single_course
             :param single_course_osiris_id
@@ -1890,7 +1903,7 @@ class CanvasRobot(object):
         db.commit()
         return num_rows
 
-    def is_user_valid(self, userinfo) -> Tuple[bool, str]:
+    def is_user_valid(self, userinfo) -> tuple[bool, str]:
         """"
         :param userinfo (dict, instance, named tuple or Storage instance with
         attributes id, login_id)
@@ -1920,14 +1933,14 @@ class CanvasRobot(object):
                 return False, 'mail invalid'
             return True, 'appears valid'
 
-    @staticmethod
-    def valid_c_id(c_id):
-        valid_c_ids = [edu for edu in EDUCATIONS]
-        valid_c_ids.append('ACSKILLS')
-        if c_id.upper() not in valid_c_ids:
-            return False, [f"Wrong c_id '{c_id.upper()}' should "
-                           f"be one of {valid_c_ids} in lower case"]
-        return True, ""
+    def is_valid_community_name(self, community_name, include_subcommunities=False) -> Result[Boolean, str]:
+        community_names = self.community_manager.subcommunity_names
+        community_names.update(list(self.community_manager.community_names) if include_subcommunities else [])
+        is_found = (community_name in community_names)
+        if not is_found:
+            return Err(f"Wrong community_name '{community_name}' should "
+                       f"be one of {community_names}")
+        return Ok(True)
 
     @staticmethod
     def deactivate_enrollment(enrollment):
@@ -1951,7 +1964,7 @@ class CanvasRobot(object):
         return "deactivated"
 
     def get_enrollments(self, c_id):
-        course = self.get_course(COMMUNITIES[c_id])
+        course = self.get_course(c_id)
         enrollments = course.get_enrollments()
 
         # errors = []
@@ -2031,9 +2044,9 @@ class CanvasRobot(object):
         return d['first_name_par'] or d['first_name'], d['prefix'] or '', d['last_name']
 
     def download_file(self, url=None, fname=None):
-        """download a remote file to static folder from url
+        """download a remote file to a static folder from url
         :param fname: local file to write to
-        :param url: remote url to fetch file from
+        :param url: remote url to fetch a file from
         """
         filename = 'static/' + fname.strip()
         logger.info("creating file %s for %s" % (filename, url))
@@ -2054,7 +2067,7 @@ class CanvasRobot(object):
 
     @staticmethod
     def receive_file(db, filename, outfile, r, url):
-        """ receive downloading file in database"""
+        """ receive a downloading file in the database"""
         logger.debug('Start receiving file in buffer')
         for block in r.iter_content(1024):
             if not block:
@@ -2110,7 +2123,7 @@ class CanvasRobot(object):
                             LabelType(label='score', field_type='percentage'),
                             LabelType(label='grade', field_type='grade')]
         styles = {
-            # list below is not complete
+            # the list below is not complete.
             # see https://www.web2pyref.com/reference/field-type-database-field-types
             'datetime': NamedStyle(name='date', number_format='yyyy-mm-dd'),
             'id': NamedStyle(name='int', number_format='#,##0'),
@@ -2168,7 +2181,7 @@ class CanvasRobot(object):
                 except ValueError:
                     pass
 
-        # mark first six row as header
+        # mark the first six rows as header
         for cell in ws[6]:
             cell.style = 'Pandas'
         ws.freeze_panes = "A7"
@@ -2216,11 +2229,11 @@ class CanvasRobot(object):
                                  ):
         """
         :param course_id:
-        except canvasapi.exceptions.Forbidden:
+        Except canvasapi.exceptions.Forbidden:
             return True, "User profile not found, due to rights, assume True"
  course_id: the quizzes are added to this course
         :param question_format: used to create the question name.
-        They will be numbered. Should contain '{}' as  placeholder
+        They will be numbered. Should contain '{}' as a placeholder
         starting with 1
         :param data: the quizdata
         :param gui_root: used in combination with GUI (tkinter)
@@ -2267,6 +2280,7 @@ class CanvasRobot(object):
         for tab in course.get_tabs():
             if tab.label == label:
                 return tab
+        raise Exception(f"In course with course_id {course_id}, the tab with label '{label}' not found")
 
     def create_folder_in_course_files(self, course_id: int, foldername: str,
                                       locked=True, report_only=False):
@@ -2363,11 +2377,11 @@ class CanvasRobot(object):
                                         files_too: bool = False,
                                         check_only: bool = False):
         """
-        :param check_only: only show publication status no change
+        :param check_only: only show the publication status, no changes
         :param foldername:
         :param course_id:
-        :param files_too: if true unpublish files in the folder too (recursive)
-        :returns  list of course ids of courses with missing foldername
+        :param files_too: if true, unpublish files in the folder too (recursive)
+        :returns a list with course-ids of courses with missing foldername
         """
         file_changes = 0
         folder_changes = 0
@@ -2408,7 +2422,7 @@ class CanvasRobot(object):
                         logger.warning(f"Files folder of {course.name}"
                                        f" ({course.id}) is visible")
                         # files_tab.visibility = "admins"
-                        # ! no change  without teachers approval!
+                        # ! no change without a teacher's approval!
                 except AttributeError:
                     logger.warning(f"Files tab visibility of "
                                    f"{course.name} {course_id} missing")

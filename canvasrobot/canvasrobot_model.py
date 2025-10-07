@@ -1,15 +1,34 @@
 from datetime import datetime
 import os
+from typing import Optional, NewType
 from pydal import DAL, Field, validators  # type: ignore
 import yaml
 import logging
 import logging.config
-
 from attrs import define
 import keyring
 # for UI use rich or tkinter
 from rich.prompt import Prompt
 from tkinter import simpledialog
+
+# from entities import Course
+
+# Custom type definitions
+CourseId = NewType('CourseId', int)
+CourseLanguage = NewType('CourseLanguage', str)
+CommunityName = NewType('CommunityName', str)
+SubcommunityName = NewType('SubcommunityName', str)
+SubcommunityDict = NewType("SubcommunityDict", dict[SubcommunityName, tuple[CourseId | None, CourseLanguage]])
+CommunityDict = NewType('CommunityDict', dict[CommunityName, tuple[CourseId | None, SubcommunityDict]])
+Username = NewType('Username', str)
+
+# Type aliases for better readability
+# SubcommunitiesDict = dict[SubcommunityName, CourseId]
+# EducationTypesList = list[EducationType]
+AdminUsersList = list[Username]
+
+# Union types for flexibility
+CommunityIdentifier = CommunityName | CourseId
 
 
 # noinspection PyClassHasNoInit
@@ -41,7 +60,7 @@ class CanvasConfig:
         self.get_values()
 
     def get_values(self):
-        """ ask for canvas url, api key and admin_id , uses keyring to
+        """ ask for canvas url, api key and admin_id, uses keyring to
         store them in a safe space"""
 
         for field in self.api_fields:
@@ -50,7 +69,7 @@ class CanvasConfig:
 
     def get_value(self, msg, entry):
         """get value for entry from keychain if present
-           else ask user to supply value (and store it)"""
+           else ask the user to supply value (and store it)"""
         value = keyring.get_password(self.namespace, entry)
         if value in (None, ""):
             # noinspection PyTypeChecker
@@ -87,32 +106,46 @@ EDUCATIONS = ('BANL',
               'BIJVAK'
               )
 
-# communities can have multiple educations
-COMMUNITY_EDU_IDS = {'banl': ['banl', 'pm_ma', 'pm_ulo', 'pm_gv'],  # nl
-                     'bauk': ['bauk', 'pm_macs'],  # uk
-                     'macs': ['macs'],
-                     'ma': ['ma', 'gv', 'ulo'],
-                     'acskills': [edu.lower() for edu in EDUCATIONS]
-                     }
 
-# the 'communities-courses' which can have sections
-COMMUNITIES = dict(
-    acskills=(4485, None),
-    theoonline=(4472, None),
-    banl=(4221, dict(
-          banl=7609,
-          pm_ma=117497,
-          pm_ulo=117499,
-          pm_gv=117498)),
-    bauk=(4227, dict(
-        bauk=7618,
-        pm_macs=117501)),
-    macs=(4230, None),
-    ma=(4228, dict(
-        ma=7619,
-        gv=117490,
-        ulo=117491))
-    )
+# the 'communities-courses' which can have subcommunities/edu_label(to retrieve students from Dibsa)
+
+
+subcies_ba_nl = SubcommunityDict({
+    SubcommunityName("banl"): (None, CourseLanguage('nl')),
+    SubcommunityName("pm_ma"): (None, CourseLanguage('nl')),
+    SubcommunityName("pm_ulo"): (None, CourseLanguage('nl')),
+    SubcommunityName("pm_gv"): (None, CourseLanguage('nl'))
+})
+
+subcies_ba_uk = SubcommunityDict({
+    SubcommunityName('bauk'): (None, CourseLanguage('uk')),
+    SubcommunityName('pm_macs'): (None, CourseLanguage('uk'))
+})
+
+subcies_ma_nl = SubcommunityDict({
+    SubcommunityName("ma"): (None, CourseLanguage('nl')),
+    SubcommunityName("gv"): (CourseId(16066), CourseLanguage('nl')),  # unpublished
+    SubcommunityName("ulo"): (CourseId(4229), CourseLanguage('nl'))  # unpublished
+})
+
+subcies_ma_all = SubcommunityDict({
+    SubcommunityName("ma"): (None, CourseLanguage('nl')),
+    SubcommunityName("gv"): (CourseId(16066), CourseLanguage('nl')),  # unpublished
+    SubcommunityName("ulo"): (CourseId(4229), CourseLanguage('nl')),  # unpublished
+    SubcommunityName("macs"): (CourseId(4230), CourseLanguage('uk'))  # unpublished
+})
+
+
+# id, dict of subcommunities
+COMMUNITIES = CommunityDict({
+    CommunityName("tststudent"): (CourseId(21329), subcies_ba_nl | subcies_ba_uk |
+                                  subcies_ma_all),  # v
+    CommunityName("acskills"): (CourseId(4485), subcies_ba_nl | subcies_ba_uk | subcies_ma_nl),  # v
+    CommunityName("macs"): (CourseId(4230), None),  # v
+    CommunityName("all_banl"): (CourseId(4221), subcies_ba_nl),  # v
+    CommunityName("all_bauk"): (CourseId(4227), subcies_ba_uk),  # v
+    CommunityName("all_ma"): (CourseId(4228), subcies_ma_nl)  # v
+})
 
 
 SHORTNAMES = dict(
@@ -121,6 +154,7 @@ SHORTNAMES = dict(
     bho3=4441,
     bgo1=10540,
     theol_credo=4472,
+    # theoonline=4472, None),
     spirsam=7660)
 
 STUDADMIN = ('rsackman',
@@ -130,6 +164,206 @@ ENROLLMENT_TYPES = dict(student='StudentEnrollment',
                         teacher='TeacherEnrollment',
                         observer='ObserverEnrollment',
                         teachingassistant='TeachingAssistantEnrollment')
+
+
+@define
+class Community:
+    """
+    Represents a Canvas LMS community with its associated subcommunities.
+
+    A community can have:
+    - A main courseID
+    - Optional subcommunities (each with their own course ID)
+    - Associated education types
+    - Metadata about the community
+    """
+
+    # Core identification
+    name: CommunityName
+    course_id: CourseId
+
+    # Optional subcommunities - maps subcommunity name to course ID
+    subcommunities: Optional[SubcommunityDict] = None
+
+    # Metadata
+    description: Optional[str] = None
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    # Administrative info
+    admin_users: AdminUsersList = []
+
+    def __post_init__(self):
+        """Ensure subcommunities is a dict if provided"""
+        if self.subcommunities is None:
+            self.subcommunities = SubcommunityDict({})
+
+    @property
+    def has_subcommunities(self) -> bool:
+        """Check if this community has any subcommunities"""
+        return bool(self.subcommunities)
+
+    @property
+    def subcommunity_course_ids(self) -> list[int]:
+        """Get all course IDs from subcommunities"""
+        course_ids = []
+        if self.subcommunities:
+            course_ids.extend(self.subcommunities.values())
+        return course_ids
+
+    @property
+    def all_course_ids(self) -> list[int]:
+        """Get all course IDs including the main course and subcommunities"""
+        course_ids = [self.course_id]
+        if self.subcommunities:
+            course_ids.extend(self.subcommunities.values())
+        return course_ids
+
+    @property
+    def subcommunity_names(self) -> list[SubcommunityName]:
+        """Get all edu_labels in the subcommunities"""
+        if self.subcommunities is None:
+            return []
+        keys = self.subcommunities.keys()
+        return [SubcommunityName(key) for key in keys]
+
+    def get_subcommunity_course_id(self, subcommunity_name: SubcommunityName) -> CourseId:
+        """Get course ID for a specific subcommunity"""
+        return self.subcommunities.get(subcommunity_name)[0] if self.subcommunities else None
+
+    def get_subcommunity_language(self, subcommunity_name: SubcommunityName) -> CourseLanguage:
+        """Get course ID for a specific subcommunity"""
+        return self.subcommunities.get(subcommunity_name)[1] if self.subcommunities else None
+
+    def add_subcommunity(self, name: SubcommunityName, course_id: CourseId, language: CourseLanguage) -> None:
+        """Add a new subcommunity"""
+        if self.subcommunities is None:
+            self.subcommunities = SubcommunityDict({})
+        self.subcommunities[name] = course_id, language
+
+    @classmethod
+    def from_legacy_data(cls, name: str, legacy_data: tuple) -> 'Community':
+        """
+        Create a Community instance from the existing COMMUNITIES dictionary format.
+
+        Args:
+            name: Community name (key from COMMUNITIES dict)
+            legacy_data: Tuple of (course_id, subcommunities_dict_or_none)
+            # data = tuple(course_id, {subcommunity_name:(id, "nl"|"uk")} )
+
+                    """
+        course_id, subcommunities = legacy_data
+
+        return cls(
+            name=CommunityName(name),
+            course_id=CourseId(course_id),
+            subcommunities=subcommunities,
+        )
+
+
+@define
+class CommunityManager:
+    """
+    Manages a collection of communities and provides utility methods.
+    """
+    communities: dict[CommunityName, Community] = {}
+
+    def __attrs_post_init__(self):
+        """Ensure communities is a dict"""
+        if not isinstance(self.communities, dict):
+            object.__setattr__(self, 'communities', {})
+
+    @property
+    def community_names(self) -> list[str]:
+        """ get a list of (top)community names"""
+        return list(self.communities.keys())
+
+    @property
+    def community_course_ids(self) -> set[str]:
+        """
+        Get a list of all subcommunity names across all communities
+        """
+        course_ids = set()
+        for community in self.communities.values():
+            course_ids.add(community.course_id)
+        return course_ids
+
+    @property
+    def subcommunity_names(self) -> set[str]:
+        """
+        Get a list of all subcommunity names across all communities
+        """
+        sc_names = set()
+        for community in self.communities.values():
+            new_names = community.subcommunity_names
+            sc_names.update(new_names)
+        return sc_names
+
+    def add_community(self, community: Community) -> None:
+        """Add a community to the manager"""
+        self.communities[community.name] = community
+
+    def get_community(self, name: CommunityName) -> Optional[Community]:
+        """Get a community by name"""
+        return self.communities.get(name)
+
+    def get_course_id_by_name(self, name: CommunityName | SubcommunityName) -> CourseId | None:
+        """Find a (sub)community by its (short)name and return course_id or return None if not found."""
+        found = self.communities.get(name)
+        if found:
+            return found.course_id
+        # Find a subcommunity course ID
+        for community in self.communities.values():
+            course_id = community.get_subcommunity_course_id(name)
+            return course_id
+        else:
+            return None
+
+    def get_community_by_name(self, name: str) -> Community | None:
+        """Find a community by its (short)name or return None if not found."""
+        found = self.communities.get(name)
+        return found
+
+    def get_community_by_course_id(self, course_id: CourseId) -> Community | None:
+        """Find a community by its course_id or return None if not found."""
+        for community in self.communities.values():
+            if community.course_id == course_id:
+                return community
+        else:
+            return None
+
+    def get_subcommunity_by_course_id(self, course_id: int) -> Optional[Community]:
+        """Find a community by its main course ID or subcommunity course ID"""
+        for community in self.communities.values():
+            if course_id in community.all_course_ids:
+                return community
+        return None
+
+    def get_edulabels_by_course_id(self, course_id: CourseId) -> list[str]:
+        """Get a list of subcommunity_names/edulabels for a given CourseId"""
+        community = self.get_community_by_course_id(course_id)
+        if community:
+            return community.subcommunity_names or [community.name]
+        return []
+
+    @classmethod
+    def from_legacy_communities(cls, communities_dict: dict[CommunityName,
+                                tuple[CourseId,
+                                      dict[SubcommunityName, tuple[CourseId, CourseLanguage]]]]) -> 'CommunityManager':
+        """
+        Create a CommunityManager from the existing COMMUNITIES dictionary.
+
+        Args:
+            communities_dict: The existing COMMUNITIES dictionary
+        """
+        manager = cls()
+        for name, data in communities_dict.items():
+            # name = community_name
+            # data = (course_id, {subcommunity_name: (id,"nl"|"uk")} )
+            community = Community.from_legacy_data(name, data)
+            manager.add_community(community)
+        return manager
 
 
 now = datetime.now()
@@ -212,7 +446,7 @@ class LocalDAL(DAL):
                           plural='LMS courses',
                           format='%(name)s[%(teacher_names)s]')
 
-        # To record a controlled set of names referring to examination assignments
+        # To record a controlled set of names referring to examination assignments.
         # We override the (sound) pyDAL principle to use course->id as reference
         # because we need the canvas course_id for browser links
         # Note that Pydal create a foreign key to course->id we need to change
@@ -295,7 +529,7 @@ class LocalDAL(DAL):
                           migrate=True)
 
         self.define_table('course_urltransform',
-                          Field('dryrun','boolean'),
+                          Field('dryrun', 'boolean'),
                           Field('course_id', 'integer'),
                           Field('course_code', 'string'),
                           Field('account_id', 'integer'),
@@ -333,3 +567,6 @@ global_config = load_config()
 if logging and logging.config and global_config:
     logging.config.dictConfig(
         global_config['logging'])  # this created named loggers like 'ca_robot.cli'
+
+# Create from existing data
+community_manager = CommunityManager.from_legacy_communities(COMMUNITIES)
