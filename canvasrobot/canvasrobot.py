@@ -961,7 +961,7 @@ class CanvasRobot(object):
                 print(observer.name)
 
     def remove_observer_from_all_courses(self, username):
-        """ remove a user as an observer from all TST courses"""
+        """ remove a user with username as an observer from all TST courses"""
         removed = []
         try:
             user = self.canvas.get_user(username, 'sis_login_id')
