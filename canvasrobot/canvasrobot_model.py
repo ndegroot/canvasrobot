@@ -320,7 +320,7 @@ class CommunityManager:
         else:
             return None
 
-    def get_community_by_name(self, name: str) -> Community | None:
+    def get_community_by_name(self, name: CommunityName) -> Community | None:
         """Find a community by its (short)name or return None if not found."""
         found = self.communities.get(name)
         return found

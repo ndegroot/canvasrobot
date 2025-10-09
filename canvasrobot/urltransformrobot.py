@@ -5,7 +5,7 @@ import operator
 from pathlib import Path
 import logging
 
-from pydal.objects import Row
+from pydal.objects import Row, Rows
 import openpyxl
 import webview
 from attrs import define
@@ -65,7 +65,7 @@ def create_excel(data, file_name: str = "output.xlsx"):
 def replace_and_count(original_string: str,
                       search_string: str,
                       replace_string: str,
-                      dryrun=False) -> (str, int):
+                      dryrun=False) -> tuple[str, int]:
     count = 0
     processed_string = original_string
     while search_string in processed_string:
@@ -139,7 +139,7 @@ class Transformation:
     """datastruct to record title, url, dryrun_state and transformed HTML of transformed
     Pages and ExternalUrls
     list contains all instances of this class
-    title and url can be retrieved as a column"""
+    The title and url can be retrieved as a column"""
 
     list: typing.ClassVar[list] = []
     title: str = ""
@@ -196,7 +196,7 @@ class UrlTransformationRobot(CanvasRobot):
         if self.db(self.db.ids).isempty():
             self.import_ids()
 
-    # Begin database section
+    # Begin the database section
     def add_media_ids_table(self):
         self.db.define_table('ids',
                              Field('panopto_id', 'string'),
@@ -218,12 +218,12 @@ class UrlTransformationRobot(CanvasRobot):
         self.db.commit()
 
     def get_video_ids(self) -> Result[list[dict[str, str]], str]:
-        """read ids table from spreadsheet"""
+        """read the id table from a spreadsheet"""
         xls_path = self.db_folder / "redirect_list.xlsx"
         try:
             sh = openpyxl.load_workbook(xls_path).active
             column_names = next(sh.values)[0:]
-            # Initialize the list of dictionaries
+            # Initialise the list of dictionaries
             rows_as_dicts = []
             # Iterate over the sheet rows (excluding header)
             for row in sh.iter_rows(min_row=2, values_only=True):
@@ -241,16 +241,16 @@ class UrlTransformationRobot(CanvasRobot):
 
     # End database section
 
-    def mediasite2panopto(self, text: str, transformation=None, dryrun=True) -> (str, bool, int):
+    def mediasite2panopto(self, text: str, transformation=None, dryrun=True) -> tuple[str, bool, int]:
         """
         Replace links in a single page or other item with text
         :param transformation: info about the (possible) transformation
         :param text possibly with one or more mediasite urls
         :param dryrun: if true just statistics, no action
         :returns tuple with
-        1. text with transformed mediasite urls if panopto id are found in lookup   (unless dryrun)
-        2. flag True, if updates were made
-        3. count of replacements made
+        1. The text with transformed mediasite urls if panopto id are found in lookup (unless dryrun)
+        2. A flag True, if updates were made
+        3. The count of replacements made
         (replace the ms_id with p_id in the
         https://videocollege.uvt.nl/Mediasite/
         Play/ce152c1602144b80bad5a222b7d4cc731d
@@ -261,7 +261,7 @@ class UrlTransformationRobot(CanvasRobot):
         updated = False
         original_text = text
         count_replacements = 0
-        # match each source-url and extract the id into a  list of ms_ids
+        # match each source-url and extract the id into a list of ms_ids
         matches = re.findall(r'(https://videocollege\.uvt\.nl/Mediasite/Play/([a-z0-9]+))', text)
 
         if num_matches := len(matches):
@@ -269,7 +269,7 @@ class UrlTransformationRobot(CanvasRobot):
         # wrong if external_url
         msg = (f"<p><a href={transformation.url} target='_blank'>"
                f" Open {transformation.ctype} '{transformation.title}'</a></p>")
-        # for each ms_id: lookup p_id and construct new target-url
+        # for each ms_id: look up p_id and construct the new target-url
         action_or_not = 'would become' if dryrun else 'changed into'
         # loop through all matches
         for match in matches:
@@ -305,30 +305,30 @@ class UrlTransformationRobot(CanvasRobot):
 
     def save_transform_data_db(self, course_id: int = None):
         """
-        1. using the course_id save course data in db.course
-        2. save teacher data in db.course2user
-        3. using the TransformedPage class save the transformed page data in db.course_urlTransform
-        ( not the transformed html (or candidate when dryrun)
+        1. Using the course_id, save course data in db.course
+        2. Save teacher data in db.course2user
+        3. Using the TransformedPage class. Save the transformed page data in db.course_urlTransform
+        (not the transformed HTML (or candidate when dryrun)
         """
 
         course = self.canvas.get_course(course_id, include=['term', 'teachers'])
 
         c_id = self.update_db_for(course, only_course=True)  # returns db.course.id
-        # course needs to be present in course table for course2user to work
+        # course needs to be present in the course table for course2user to work
 
         db = self.db
 
         teacher_names = [teacher["display_name"] for teacher in course.teachers]
-        # teacher_ids = [teacher["id"]  for teacher in course.teachers]
+        # teacher_ids = [teacher["id"] for teacher in course.teachers]
 
         # result = self.update_db_teachers(course)  # also creates db.user entries
         # if is_err(result):
-        #     click.echo("No info about teachers available (authorization error)")
+        #     click.echo("No info about teachers available (authorisation error)")
         #     teacher_logins, teacher_names, teacher_ids = (), (), ()
         # else:
         #     teacher_logins, teacher_names, teacher_ids = result.ok_value
 
-        # make relational link between course-user(teacher)
+        # make a relational link between course-user(teacher)
         teacher_logins = list()
         teacher_emails = list()
 
@@ -391,10 +391,10 @@ class UrlTransformationRobot(CanvasRobot):
         pass
 
     # noinspection PyUnusedLocal
-    def get_transform_data(self, single_course: int, all_courses=False, admin_id: int = 0) -> Row or None:
-        """ get (candidate if row.dryrun) transform data as a PyDal Row
+    def get_transform_data(self, single_course: int, all_courses=False, admin_id: int = 0) -> Row | Rows | None:
+        """ get (candidate when row.dryrun) transform data as a PyDal Row
         if not single_course collect *all* available course data based on admin_id.
-        if admin_id == 0 all courses for default admin-account are exported else select only course for admin_id
+        if admin_id == 0 all courses for the default admin-account are exported else select only course for admin_id
         :param all_courses:
         :param admin_id:
         :param single_course:
@@ -405,6 +405,7 @@ class UrlTransformationRobot(CanvasRobot):
         if single_course:
             row = db(db.course_urltransform.course_id == single_course).select(db.course_urltransform.ALL).first()
             return row
+
         if all_courses:
             # self.canvas.get_account(config.admin_id) if conf
             # self.admin = self.canvas.get_account(config.admin_id) if conf
@@ -413,7 +414,7 @@ class UrlTransformationRobot(CanvasRobot):
             else:
                 courses = self.admin.get_courses(by_subaccounts=[admin_id, ])
                 if len(list(courses)) == 0:
-                    # use csv file with (only) course_ids instead
+                    # use a csv file with (only) course_ids instead
                     self.console.log(f"No courses found using for admin {admin_id} access through Canvas "
                                      f"(possibly no rights). Using ids from local CSV file instead...")
                     courses = self.get_courses_admin_csv(admin_id)
@@ -424,6 +425,7 @@ class UrlTransformationRobot(CanvasRobot):
                       (db.course_urltransform.nr_pages > 0 or
                        db.course_urltransform.nr_module_items > 0)).select(db.course_urltransform.ALL)
             return rows
+        return None
 
     def export_transform_data(self,
                               single_course: int = 0,
@@ -440,9 +442,9 @@ class UrlTransformationRobot(CanvasRobot):
     def transform_urls_in_course(self, course_id: int, dryrun=True) -> bool:
         """
         Transform the mediasite urls in all pages and module-items of the course with this course_id
-        record all transformations in Transformation class-object
+        record all transformations in the Transformation class-object
         :param course_id:
-        :param dryrun: if true no action just candidates
+        :param dryrun: If True, no action.  Just candidates
         :return: True unless error
         """
         # self.transformation_course_report = ""
@@ -586,7 +588,7 @@ def scan_replace_urls(robot=None,
                       dryrun: bool = True):
     """for a single_course (or all courses) scan and optionally replace mediasite urls
     :param robot:
-    :param single_course: if 0 do all courses (for this admin_id )
+    :param single_course: if 0 do all courses (for admin_id)
     :param admin_id:
     :param stop_after:
     :param dryrun:

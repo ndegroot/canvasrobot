@@ -1,6 +1,6 @@
 from .canvasrobot import CanvasRobot, LocalDAL, COMMUNITIES
 from .canvasrobot_model import STUDADMIN, SHORTNAMES, ENROLLMENT_TYPES, Field
-from .urltransform import UrlTransformationRobot, show_result, Transformation, cli, scan_replace_urls
+from .urltransformRobot import UrlTransformationRobot, show_result, Transformation, cli, scan_replace_urls
 from .commandline import show_search_result, get_logger, create_db_folder
 
 __all__ = ["CanvasRobot", "UrlTransformationRobot", "LocalDAL", "Field",
