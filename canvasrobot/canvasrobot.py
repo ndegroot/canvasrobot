@@ -15,6 +15,7 @@ import logging
 import binascii
 import rich.prompt
 from canvasapi.module import ModuleItem
+from canvasapi.section import Section
 from pyasn1.type.univ import Boolean
 from result import Ok, Err, Result, is_ok, is_err  # noqa: F401
 import attrs
@@ -886,21 +887,23 @@ class CanvasRobot(object):
             self.actions.append(f"{user.name} added to {course.name} as {role}")
         return
 
-    def enroll_user_in_course_section(self, user, course, section_id, role):
-        section = course.get_section(section_id)
+    def enroll_user_in_course_section(self, user: User, course: Course, section: Section | int):
+        if isinstance(section, int):
+            section = course.get_section(section_id)
         """
-        enroll (valid) user in section of course with role
+        enroll (valid) user in section of course 
         :param user:
         :param course:
         :section_id:
         """
+
         try:
             section.enroll_user(user)
         except (canvasapi.exceptions.BadRequest,
-                canvasapi.exceptions.Conflict) as e:
+                canvasapi.exceptions.Conflict, Exception) as e:
             self.errors.append(f'User {user.name} not added to {course.name} in section{section.name}: {e}')
         else:
-            self.actions.append(f"{user.name} added to {course.name} in section {section.name} as {role}")
+            self.actions.append(f"{user.name} added to {course.name} in section {section.name}")
         return
 
     def enroll_students_in_communities(self, local=False):
