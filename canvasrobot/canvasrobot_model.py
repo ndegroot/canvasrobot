@@ -412,7 +412,7 @@ class LocalDAL(DAL):
                           Field('last_db_update', 'datetime'),
                           singular='Canvasrobot setting',
                           plural='CanvasRobot settings',
-                          migrate=False)
+                          migrate=True)
 
         self.define_table('course',
                           Field('course_id', 'integer'),

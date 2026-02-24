@@ -25,6 +25,7 @@ import canvasapi
 import requests
 
 # from functools import lru_cache
+
 try:  # type: ignore
     from pymemcache import serde  # type: ignore
     from pymemcache.client import base  # type: ignore
@@ -449,7 +450,8 @@ class CanvasRobot(object):
         return self.canvas.get_course(course_id, use_sis_id=use_sis_id, **kwargs)
 
     def get_courses(self, enrollment: dict):
-        """"
+        """
+        get all courses for current user in the role of 'enrollment'
         :param enrollment 'teacher'(default), 'student','ta', 'observer' 'designer'
         :returns canvas courses for current user in role"""
         enrollment = enrollment or {'type': 'TeacherEnrollment'}
@@ -460,7 +462,7 @@ class CanvasRobot(object):
                                this_year=True,
                                admin_id: int | None = None):
         """
-        get all courses from canvas connected to an account.
+        get all courses from canvas connected to an admin account.
 
         :param by_teachers: list of teacher id's
         :param this_year: True=filter courses to include only the current year
@@ -520,12 +522,18 @@ class CanvasRobot(object):
         return filtered_courses
 
     def get_courses_admin_csv(self, admin_id):
-        # get ids, create a scarce list (only course.id attribute), needs a local csv file
+        """
+        :param admin_id:
+        :returns list of courses
+        When a local scraped csv file is available
+        get list of course ids,
+        create a scarce list (only course.id attribute)
+        """
         courses = []
         csv_path = Path(self.db_folder) / f"course_ids_admin{admin_id}.csv"
         if not csv_path.exists():
             self.console.log(f" Missing csv file {csv_path} with course_ids, "
-                             f"please use scraping tooled to create it using {admin_id=} as admin_id. .")
+                             f"please use scraping tool to create it using {admin_id=} as admin_id. .")
             raise FileNotFoundError(f"Missing for {admin_id=}:{csv_path}")
 
         with open(csv_path, mode='r') as csv_file:
@@ -944,24 +952,29 @@ class CanvasRobot(object):
                     else:
                         self.enroll_user_in_course(student, course, role=role_student)
 
-    def add_observer_to_education(self, user, report_only=False):
+    def add_auditor_to_education(self, user: User, report_only=False):
         """ add user as an observer to all courses of an education"""
         # todo: select courses using membership of education using osiris ids
         # not working just showing
+        enrollment = "ObserverEnrollment"
         if not report_only:
             print("Add is not implemented!")
+
         print('Showing ALL observers for ALL courses')
-        print(user)
+        print(f"Current user:  {user}")
         # idea: filter course of an education using db
         for course in self.admin.get_courses():
             # only insert/update course if current year
-            if str(course.sis_course_id)[:4] != str(self.year):
+            if str(course.sis_course_id)[:4] != str(self.year) or "_conclude" in course.name:
                 continue
-            observers = course.get_users(enrollment={'type': 'ObserverEnrollment'})
-            for observer in observers:
-                if not hasattr(observer, 'login_id'):
-                    continue
-                print(observer.name)
+            print(f"Course: {course.name} current users with {enrollment=}:")
+            items = course.get_enrollments(type=enrollment)
+            for item in items:
+                # if not hasattr(item, 'login_id'):
+                #   continue
+                print(item.user["name"])
+            if not report_only:
+                course.enroll_user(user, enrollment)
 
     def remove_observer_from_all_courses(self, username):
         """ remove a user with username as an observer from all TST courses"""
@@ -1649,7 +1662,7 @@ class CanvasRobot(object):
         :return:
         """
 
-        def count_students(course: canvasapi.Course) -> int:
+        def count_students(course: canvasapi.course.Course) -> int:  # typehint was canvasapi.Course ...
             """" return -1 if not authorised"""
             # students
             try:
@@ -1738,7 +1751,7 @@ class CanvasRobot(object):
                                                 account_id=course.account_id,
                                                 # status=course.workflow_state,
                                                 course_code=course.course_code,
-                                                term=course.term["name"],
+                                                # term=course.term["name"],
                                                 sis_code=course.sis_course_id if hasattr(course,
                                                                                          'sis_course_id') else "n.a.",
                                                 # year course_code and suffixes
@@ -1866,7 +1879,7 @@ class CanvasRobot(object):
         if max_number:
             target = f" {max_number} courses"
 
-        with Progress(console=self.console) as progress:
+        with (Progress(console=self.console) as progress):
             task_count = progress.add_task("[green]Counting courses...", total=None)
 
             num_rows = 0
@@ -1883,10 +1896,12 @@ class CanvasRobot(object):
                 self.add_message("<Progress>", (course.name, idx, num_courses))
 
                 # only insert/update course if current year unless single_course
-                if (str(course.term)[:4] != str(self.year)
-                    or course.name.endswith('conclude')) \
-                        and not (single_course or single_course_osiris_id):
-                    continue
+                # also skip long running courses
+                if not hasattr(course, 'sis_course_id') \
+                   or (str(course.sis_course_id)[:4] != str(self.year)
+                   or course.name.endswith('conclude')) \
+                       and not (single_course or single_course_osiris_id):
+                   continue
                 # skip specified courses
                 if stop_list and course.name in stop_list:
                     continue

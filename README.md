@@ -21,9 +21,9 @@ urltransform --help
 - rich
 - rich_click
 - keyring (safe store for API key)
-- pydal (local database)
+- pydal (to create a local SQLite database)
 - pywebview (HTML reporting)
-- [opt] pymemcache (install to add caching canvas interaction)
+- [opt] pymemcache (install to add caching the Canvas interaction)
 
 ## Used 
 In word2quiz library.
