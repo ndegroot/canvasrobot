@@ -1,6 +1,6 @@
 [project]
 name = "canvasrobot"
-version = "0.9.1"
+version = "0.9.3"
 description = "Library which uses Canvasapi (see https://canvasapi.readthedocs.io) to provide a CanvasRobot class."
 readme = "README.md"
 authors = [
@@ -41,7 +41,7 @@ urltransform = "canvasrobot.urltransform:cli"
 py-modules = ["canvasrobot"]
 
 [tool.bumpversion]
-current_version = "0.8.0"
+current_version = "0.9.2"
 parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
 serialize = ["{major}.{minor}.{patch}"]
 search = "{current_version}"

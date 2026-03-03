@@ -153,8 +153,8 @@ SHORTNAMES = dict(
     bho2=4440,
     bho3=4441,
     bgo1=10540,
-    theol_credo=4472,
-    # theoonline=4472, None),
+    theonl_credo=4472,
+    theonl_vc=7830,
     spirsam=7660)
 
 STUDADMIN = ('rsackman',
